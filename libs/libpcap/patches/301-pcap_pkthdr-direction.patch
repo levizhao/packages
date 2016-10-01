@@ -1,0 +1,52 @@
+diff -Naur a/pcap/pcap.h b/pcap/pcap.h
+--- a/pcap/pcap.h	2016-10-01 12:18:16.000000000 +0800
++++ b/pcap/pcap.h	2016-10-01 13:05:30.027521100 +0800
+@@ -164,6 +164,7 @@
+ 	struct timeval ts;	/* time stamp */
+ 	bpf_u_int32 caplen;	/* length of portion present */
+ 	bpf_u_int32 len;	/* length this packet (off wire) */
++	bpf_u_int32 outbound;	/* the outbound or inbound flag */
+ };
+ 
+ /*
+diff -Naur a/pcap-linux.c b/pcap-linux.c
+--- a/pcap-linux.c	2016-10-01 12:18:16.000000000 +0800
++++ b/pcap-linux.c	2016-10-01 13:02:37.025436500 +0800
+@@ -1482,6 +1482,7 @@
+ #endif /* defined(HAVE_PACKET_AUXDATA) && defined(HAVE_LINUX_TPACKET_AUXDATA_TP_VLAN_TCI) */
+ 	int			packet_len, caplen;
+ 	struct pcap_pkthdr	pcap_header;
++	pcap_header.outbound = 0;
+ 
+ #ifdef HAVE_PF_PACKET_SOCKETS
+ 	/*
+@@ -1608,6 +1609,10 @@
+ 		 */
+ 		if (!linux_check_direction(handle, &from))
+ 			return 0;
++		// update the packet direction
++		if(from.sll_pkttype == PACKET_OUTGOING) {
++			pcap_header.outbound = 1;
++		}
+ 	}
+ #endif
+ 
+@@ -4190,6 +4195,7 @@
+ 	unsigned char *bp;
+ 	struct sockaddr_ll *sll;
+ 	struct pcap_pkthdr pcaphdr;
++	pcaphdr.outbound = 0;
+ 
+ 	/* perform sanity check on internal offset. */
+ 	if (tp_mac + tp_snaplen > handle->bufsize) {
+@@ -4219,6 +4225,10 @@
+ 	if (!linux_check_direction(handle, sll))
+ 		return 0;
+ 
++	// update the packet direction
++	if(sll->sll_pkttype == PACKET_OUTGOING) {
++		pcaphdr.outbound = 1;
++	}
+ 	/* get required packet info from ring header */
+ 	pcaphdr.ts.tv_sec = tp_sec;
+ 	pcaphdr.ts.tv_usec = tp_usec;
