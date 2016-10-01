@@ -1,11 +1,11 @@
 diff -Naur a/pcap/pcap.h b/pcap/pcap.h
 --- a/pcap/pcap.h	2016-10-01 12:18:16.000000000 +0800
-+++ b/pcap/pcap.h	2016-10-01 13:31:26.397415000 +0800
++++ b/pcap/pcap.h	2016-10-01 13:40:54.500012900 +0800
 @@ -164,6 +164,9 @@
  	struct timeval ts;	/* time stamp */
  	bpf_u_int32 caplen;	/* length of portion present */
  	bpf_u_int32 len;	/* length this packet (off wire) */
-+#ifdef PCAP_WITH_DIRECTION
++#ifdef PCAP_DISABLE_DIRECTION
 +	bpf_u_int32 outbound;	/* the outbound or inbound flag */
 +#endif
  };
@@ -13,12 +13,12 @@ diff -Naur a/pcap/pcap.h b/pcap/pcap.h
  /*
 diff -Naur a/pcap-linux.c b/pcap-linux.c
 --- a/pcap-linux.c	2016-10-01 12:18:16.000000000 +0800
-+++ b/pcap-linux.c	2016-10-01 13:31:20.932710300 +0800
++++ b/pcap-linux.c	2016-10-01 13:41:25.257936100 +0800
 @@ -1482,6 +1482,9 @@
  #endif /* defined(HAVE_PACKET_AUXDATA) && defined(HAVE_LINUX_TPACKET_AUXDATA_TP_VLAN_TCI) */
  	int			packet_len, caplen;
  	struct pcap_pkthdr	pcap_header;
-+#ifdef PCAP_WITH_DIRECTION
++#ifdef PCAP_DISABLE_DIRECTION
 +	pcap_header.outbound = 0;
 +#endif
  
@@ -28,7 +28,7 @@ diff -Naur a/pcap-linux.c b/pcap-linux.c
  		 */
  		if (!linux_check_direction(handle, &from))
  			return 0;
-+#ifdef PCAP_WITH_DIRECTION
++#ifdef PCAP_DISABLE_DIRECTION
 +		// update the packet direction
 +		if(from.sll_pkttype == PACKET_OUTGOING) {
 +			pcap_header.outbound = 1;
@@ -41,7 +41,7 @@ diff -Naur a/pcap-linux.c b/pcap-linux.c
  	unsigned char *bp;
  	struct sockaddr_ll *sll;
  	struct pcap_pkthdr pcaphdr;
-+#ifdef PCAP_WITH_DIRECTION
++#ifdef PCAP_DISABLE_DIRECTION
 +	pcaphdr.outbound = 0;
 +#endif
  
@@ -51,7 +51,7 @@ diff -Naur a/pcap-linux.c b/pcap-linux.c
  	if (!linux_check_direction(handle, sll))
  		return 0;
  
-+#ifdef PCAP_WITH_DIRECTION
++#ifdef PCAP_DISABLE_DIRECTION
 +	// update the packet direction
 +	if(sll->sll_pkttype == PACKET_OUTGOING) {
 +		pcaphdr.outbound = 1;
