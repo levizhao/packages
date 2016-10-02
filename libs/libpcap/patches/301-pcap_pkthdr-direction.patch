@@ -1,60 +1,107 @@
+diff -Naur a/config.h.in b/config.h.in
+--- a/config.h.in	2013-11-08 07:23:22.000000000 +0800
++++ b/config.h.in	2016-10-03 00:09:53.322118800 +0800
+@@ -3,6 +3,9 @@
+ /* Enable optimizer debugging */
+ #undef BDEBUG
+ 
++/* Define if we enable direciton in pcaphdr */
++#undef HAVE_DIRECTION_IN_PCAPHDR
++
+ /* define if you have a cloning BPF device */
+ #undef HAVE_CLONING_BPF
+ 
+diff -Naur a/configure.in b/configure.in
+--- a/configure.in	2013-11-08 07:23:22.000000000 +0800
++++ b/configure.in	2016-10-03 01:02:40.700447400 +0800
+@@ -436,6 +436,19 @@
+ #include <linux/if.h>
+ #include <linux/types.h>
+ 	])
++	
++	#
++	# Do we have packet direction?
++	#
++	AC_CHECK_HEADERS([linux/if_packet.h.h], [
++		AC_CHECK_DECLS([sockaddr_ll], [
++			AC_DEFINE(HAVE_DIRECTION_IN_PCAPHDR,1,[if direction of packet exists])
++		], [
++			AC_DEFINE(HAVE_DIRECTION_IN_PCAPHDR,0,[if direction of packet exists])
++		], [[#include <linux/if_packet.h.h>]])
++	],[
++		AC_DEFINE(HAVE_DIRECTION_IN_PCAPHDR,0,[if direction of packet exists])
++	])
+ 
+ 	#
+ 	# Do we have libnl?
 diff -Naur a/pcap/pcap.h b/pcap/pcap.h
 --- a/pcap/pcap.h	2016-10-01 12:18:16.000000000 +0800
-+++ b/pcap/pcap.h	2016-10-01 13:45:46.023930800 +0800
-@@ -164,6 +164,9 @@
++++ b/pcap/pcap.h	2016-10-03 01:10:32.753733800 +0800
+@@ -51,6 +51,8 @@
+ #include <pcap/bpf.h>
+ #endif
+ 
++#define HAVE_DIRECTION_IN_PCAPHDR
++
+ #include <stdio.h>
+ 
+ #ifdef __cplusplus
+@@ -164,6 +166,7 @@
  	struct timeval ts;	/* time stamp */
  	bpf_u_int32 caplen;	/* length of portion present */
  	bpf_u_int32 len;	/* length this packet (off wire) */
-+#ifndef PCAP_DISABLE_DIRECTION
-+	bpf_u_int32 outbound;	/* the outbound or inbound flag */
-+#endif
++	pcap_direction_t direct;	/* the outbound or inbound flag */
  };
  
  /*
 diff -Naur a/pcap-linux.c b/pcap-linux.c
 --- a/pcap-linux.c	2016-10-01 12:18:16.000000000 +0800
-+++ b/pcap-linux.c	2016-10-01 13:45:58.009719400 +0800
++++ b/pcap-linux.c	2016-10-03 00:59:16.364126500 +0800
 @@ -1482,6 +1482,9 @@
  #endif /* defined(HAVE_PACKET_AUXDATA) && defined(HAVE_LINUX_TPACKET_AUXDATA_TP_VLAN_TCI) */
  	int			packet_len, caplen;
  	struct pcap_pkthdr	pcap_header;
-+#ifndef PCAP_DISABLE_DIRECTION
-+	pcap_header.outbound = 0;
++#if HAVE_DIRECTION_IN_PCAPHDR == 1
++	pcap_header.direct = PCAP_D_INOUT;
 +#endif
  
  #ifdef HAVE_PF_PACKET_SOCKETS
  	/*
-@@ -1608,6 +1611,12 @@
+@@ -1608,6 +1611,14 @@
  		 */
  		if (!linux_check_direction(handle, &from))
  			return 0;
-+#ifndef PCAP_DISABLE_DIRECTION
++#if HAVE_DIRECTION_IN_PCAPHDR == 1
 +		// update the packet direction
 +		if(from.sll_pkttype == PACKET_OUTGOING) {
-+			pcap_header.outbound = 1;
++			pcap_header.direct = PCAP_D_OUT;
++		} else {
++			pcap_header.direct = PCAP_D_IN;
 +		}
 +#endif
  	}
  #endif
  
-@@ -4190,6 +4199,9 @@
+@@ -4190,6 +4201,9 @@
  	unsigned char *bp;
  	struct sockaddr_ll *sll;
  	struct pcap_pkthdr pcaphdr;
-+#ifndef PCAP_DISABLE_DIRECTION
-+	pcaphdr.outbound = 0;
++#if HAVE_DIRECTION_IN_PCAPHDR == 1
++	pcaphdr.direct = PCAP_D_INOUT;
 +#endif
  
  	/* perform sanity check on internal offset. */
  	if (tp_mac + tp_snaplen > handle->bufsize) {
-@@ -4219,6 +4231,12 @@
+@@ -4219,6 +4233,14 @@
  	if (!linux_check_direction(handle, sll))
  		return 0;
  
-+#ifndef PCAP_DISABLE_DIRECTION
++#if HAVE_DIRECTION_IN_PCAPHDR == 1
 +	// update the packet direction
 +	if(sll->sll_pkttype == PACKET_OUTGOING) {
-+		pcaphdr.outbound = 1;
++		pcaphdr.direct = PCAP_D_OUT;
++	} else {
++		pcaphdr.direct = PCAP_D_IN;
 +	}
 +#endif
  	/* get required packet info from ring header */
