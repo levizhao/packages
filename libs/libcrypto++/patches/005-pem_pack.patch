@@ -1,0 +1,2840 @@
+Index: libcrypto++-5.6.0/pem-com.cpp
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-com.cpp
+@@ -0,0 +1,162 @@
++// pem-com.cpp - commom PEM routines. Written and placed in the public domain by Jeffrey Walton
++//               Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++///////////////////////////////////////////////////////////////////////////
++// For documentation on the PEM read and write routines, see
++//   http://www.cryptopp.com/wiki/PEM_Pack
++///////////////////////////////////////////////////////////////////////////
++
++#include "cryptlib.h"
++#include "secblock.h"
++#include "base64.h"
++#include "osrng.h"
++
++#include <algorithm>
++#include <cctype>
++#include <cstring>
++
++#include "pem.h"
++#include "pem-com.h"
++
++NAMESPACE_BEGIN(CryptoPP)
++
++void PEM_WriteLine(BufferedTransformation& bt, const SecByteBlock& line)
++{
++    bt.Put(line.data(), line.size());
++    bt.Put('\n');
++}
++
++void PEM_WriteLine(BufferedTransformation& bt, const std::string& line)
++{
++    bt.Put(reinterpret_cast<const byte*>(line.data()), line.size());
++    bt.Put('\n');
++}
++
++void PEM_Base64Decode(BufferedTransformation& source, BufferedTransformation& dest)
++{
++    Base64Decoder decoder(new Redirector(dest));
++    source.TransferTo(decoder);
++    decoder.MessageEnd();
++}
++
++void PEM_Base64Encode(BufferedTransformation& source, BufferedTransformation& dest)
++{
++    Base64Encoder encoder(new Redirector(dest), true /*lineBreak*/, RFC1421_LINE_BREAK);
++    source.TransferTo(encoder);
++    encoder.MessageEnd();
++}
++
++SecByteBlock GetControlField(const SecByteBlock& line)
++{
++    SecByteBlock::const_iterator it = std::search(line.begin(), line.end(), SBB_COLON.begin(), SBB_COLON.end());
++    if(it != line.end())
++    {
++        size_t len = it - line.begin();
++        return SecByteBlock(line.data(), len);
++    }
++    
++    return SecByteBlock();
++}
++
++SecByteBlock GetControlFieldData(const SecByteBlock& line)
++{
++    SecByteBlock::const_iterator it = std::search(line.begin(), line.end(), SBB_COLON.begin(), SBB_COLON.end());
++    if(it != line.end() && ++it != line.end())
++    {
++        size_t len = line.end() - it;
++        return SecByteBlock(it, len);
++    }
++    
++    return SecByteBlock();
++}
++
++// Returns 0 if a match, non-0 otherwise
++int CompareNoCase(const SecByteBlock& first, const SecByteBlock& second)
++{
++    if(first.size() < second.size())
++        return -1;
++    else if(second.size() < first.size())
++        return 1;
++    
++    // Same size... compare them....
++    SecByteBlock t1(first), t2(second);
++    std::transform(t1.begin(), t1.end(), t1.begin(), (int(*)(int))std::tolower);
++    std::transform(t2.begin(), t2.end(), t2.begin(), (int(*)(int))std::tolower);
++    
++    return std::memcmp(t1.begin(), t2.begin(), t2.size());
++}
++
++// From crypto/evp/evp_key.h. Signature changed a bit to match Crypto++.
++int OPENSSL_EVP_BytesToKey(HashTransformation& hash,
++                           const unsigned char *salt, const unsigned char* data, int dlen,
++                           unsigned int count, unsigned char *key, unsigned int ksize,
++                           unsigned char *iv, unsigned int vsize)
++{
++    unsigned int niv,nkey,nhash;
++    unsigned int addmd=0,i;
++    
++    nkey=ksize;
++    niv=vsize;
++    nhash=hash.DigestSize();
++    
++    SecByteBlock digest(hash.DigestSize());
++    
++    if (data == NULL) return (0);
++    
++    for (;;)
++    {
++        hash.Restart();
++        
++        if(addmd++)
++            hash.Update(digest.data(), digest.size());
++        
++        hash.Update(data, dlen);
++        
++        if (salt != NULL)
++            hash.Update(salt, OPENSSL_PKCS5_SALT_LEN);
++        
++        hash.TruncatedFinal(digest.data(), digest.size());
++        
++        for (i=1; i<count; i++)
++        {
++            hash.Restart();
++            hash.Update(digest.data(), digest.size());
++            hash.TruncatedFinal(digest.data(), digest.size());
++        }
++        
++        i=0;
++        if (nkey)
++        {
++            for (;;)
++            {
++                if (nkey == 0) break;
++                if (i == nhash) break;
++                if (key != NULL)
++                    *(key++)=digest[i];
++                nkey--;
++                i++;
++            }
++        }
++        if (niv && (i != nhash))
++        {
++            for (;;)
++            {
++                if (niv == 0) break;
++                if (i == nhash) break;
++                if (iv != NULL)
++                    *(iv++)=digest[i];
++                niv--;
++                i++;
++            }
++        }
++        if ((nkey == 0) && (niv == 0)) break;
++    }
++    
++    return ksize;
++}
++
++NAMESPACE_END
+Index: libcrypto++-5.6.0/pem-com.h
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-com.h
+@@ -0,0 +1,217 @@
++// pem-com.h - commom PEM routines. Written and placed in the public domain by Jeffrey Walton
++//             Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++///////////////////////////////////////////////////////////////////////////
++// For documentation on the PEM read and write routines, see
++//   http://www.cryptopp.com/wiki/PEM_Pack
++///////////////////////////////////////////////////////////////////////////
++
++#ifndef CRYPTOPP_PEM_COM_H
++#define CRYPTOPP_PEM_COM_H
++
++#include "cryptlib.h"
++#include "secblock.h"
++#include "osrng.h"
++#include "pem.h"
++
++#include <string>
++
++NAMESPACE_BEGIN(CryptoPP)
++	
++//////////////////////////////////////////////////////
++//////////////////////////////////////////////////////
++
++// By default, keys and parameters are validated after reading in Debug builds.
++//   You will have to call key.Validate() yourself if desired. If you want automatic
++//   validation, then uncomment the line below or set it on the command line.
++// #define PEM_KEY_OR_PARAMETER_VALIDATION 1
++
++// Perform key or parameter validation in Debug builds.
++#if !defined(NDEBUG) && !defined(PEM_KEY_OR_PARAMETER_VALIDATION)
++# define PEM_KEY_OR_PARAMETER_VALIDATION 1
++#endif
++
++//////////////////////////////////////////////////////
++//////////////////////////////////////////////////////
++
++static inline SecByteBlock StringToSecByteBlock(const std::string& str)
++{
++    return SecByteBlock(reinterpret_cast<const byte*>(str.data()), str.size());
++}
++
++static inline SecByteBlock StringToSecByteBlock(const char* str)
++{
++    return SecByteBlock(reinterpret_cast<const byte*>(str), strlen(str));
++}
++
++static inline const byte* BYTE_PTR(const char* cstr)
++{
++    return reinterpret_cast<const byte*>(cstr);
++}
++
++static inline byte* BYTE_PTR(char* cstr)
++{
++    return reinterpret_cast<byte*>(cstr);
++}
++
++// Attempts to locate a control field in a line
++SecByteBlock GetControlField(const SecByteBlock& line);
++
++// Attempts to fetch the data from a control line
++SecByteBlock GetControlFieldData(const SecByteBlock& line);
++
++// Returns 0 if a match, non-0 otherwise
++int CompareNoCase(const SecByteBlock& first, const SecByteBlock& second);
++
++// Base64 Encode
++void PEM_Base64Encode(BufferedTransformation& source, BufferedTransformation& dest);
++
++// Base64 Decode
++void PEM_Base64Decode(BufferedTransformation& source, BufferedTransformation& dest);
++
++// Write to a BufferedTransformation
++void PEM_WriteLine(BufferedTransformation& bt, const std::string& line);
++void PEM_WriteLine(BufferedTransformation& bt, const SecByteBlock& line);
++
++// Signature changed a bit to match Crypto++. Salt must be PKCS5_SALT_LEN in length.
++//  Salt, Data and Count are IN; Key and IV are OUT.
++int OPENSSL_EVP_BytesToKey(HashTransformation& hash,
++                           const unsigned char *salt, const unsigned char* data, int dlen,
++                           unsigned int count, unsigned char *key, unsigned int ksize,
++                           unsigned char *iv, unsigned int vsize);
++
++// From OpenSSL, crypto/evp/evp.h.
++static const unsigned int OPENSSL_PKCS5_SALT_LEN = 8;
++
++// 64-character line length is required by RFC 1421.
++static const unsigned int RFC1421_LINE_BREAK = 64;
++// static const unsigned int OPENSSL_B64_LINE_BREAK = 76;
++
++
++// Signals failure
++static const size_t PEM_INVALID = static_cast<size_t>(-1);
++
++static const std::string LBL_PUBLIC_BEGIN("-----BEGIN PUBLIC KEY-----");
++static const std::string LBL_PUBLIC_END("-----END PUBLIC KEY-----");
++
++static const std::string LBL_PRIVATE_BEGIN("-----BEGIN PRIVATE KEY-----");
++static const std::string LBL_PRIVATE_END("-----END PRIVATE KEY-----");
++
++static const std::string LBL_RSA_PUBLIC_BEGIN("-----BEGIN RSA PUBLIC KEY-----");
++static const std::string LBL_RSA_PUBLIC_END("-----END RSA PUBLIC KEY-----");
++
++static const std::string LBL_RSA_PRIVATE_BEGIN("-----BEGIN RSA PRIVATE KEY-----");
++static const std::string LBL_RSA_PRIVATE_END("-----END RSA PRIVATE KEY-----");
++
++static const std::string LBL_DSA_PUBLIC_BEGIN("-----BEGIN DSA PUBLIC KEY-----");
++static const std::string LBL_DSA_PUBLIC_END("-----END DSA PUBLIC KEY-----");
++
++static const std::string LBL_DSA_PRIVATE_BEGIN("-----BEGIN DSA PRIVATE KEY-----");
++static const std::string LBL_DSA_PRIVATE_END("-----END DSA PRIVATE KEY-----");
++
++static const std::string LBL_EC_PUBLIC_BEGIN("-----BEGIN EC PUBLIC KEY-----");
++static const std::string LBL_EC_PUBLIC_END("-----END EC PUBLIC KEY-----");
++
++static const std::string LBL_ECDSA_PUBLIC_BEGIN("-----BEGIN ECDSA PUBLIC KEY-----");
++static const std::string LBL_ECDSA_PUBLIC_END("-----END ECDSA PUBLIC KEY-----");
++
++static const std::string LBL_EC_PRIVATE_BEGIN("-----BEGIN EC PRIVATE KEY-----");
++static const std::string LBL_EC_PRIVATE_END("-----END EC PRIVATE KEY-----");
++
++static const std::string LBL_EC_PARAMETERS_BEGIN("-----BEGIN EC PARAMETERS-----");
++static const std::string LBL_EC_PARAMETERS_END("-----END EC PARAMETERS-----");
++
++static const std::string LBL_DH_PARAMETERS_BEGIN("-----BEGIN DH PARAMETERS-----");
++static const std::string LBL_DH_PARAMETERS_END("-----END DH PARAMETERS-----");
++
++static const std::string LBL_DSA_PARAMETERS_BEGIN("-----BEGIN DSA PARAMETERS-----");
++static const std::string LBL_DSA_PARAMETERS_END("-----END DSA PARAMETERS-----");
++
++static const std::string LBL_CERTIFICATE_BEGIN("-----BEGIN CERTIFICATE-----");
++static const std::string LBL_CERTIFICATE_END("-----END CERTIFICATE-----");
++
++static const std::string LBL_X509_CERTIFICATE_BEGIN("-----BEGIN X509 CERTIFICATE-----");
++static const std::string LBL_X509_CERTIFICATE_END("-----END X509 CERTIFICATE-----");
++
++static const std::string LBL_REQ_CERTIFICATE_BEGIN("-----BEGIN CERTIFICATE REQUEST-----");
++static const std::string LBL_REQ_CERTIFICATE_END("-----END CERTIFICATE REQUEST-----");
++
++static const std::string LBL_PROC_TYPE("Proc-Type");
++static const std::string LBL_PROC_TYPE_ENC("Proc-Type: 4,ENCRYPTED");
++static const std::string LBL_ENCRYPTED("ENCRYPTED");
++static const std::string LBL_DEK_INFO("DEK-Info");
++static const std::string LBL_CONTENT_DOMAIN("Content-Domain");
++static const std::string LBL_COMMA(",");
++static const std::string LBL_SPACE(" ");
++static const std::string LBL_COLON(":");
++
++
++static const SecByteBlock CR(BYTE_PTR("\r"), 1);
++static const SecByteBlock LF(BYTE_PTR("\n"), 1);
++static const SecByteBlock CRLF(BYTE_PTR("\r\n"), 2);
++
++static const SecByteBlock SBB_PEM_BEGIN(BYTE_PTR("-----BEGIN"), 10);
++static const SecByteBlock SBB_PEM_TAIL(BYTE_PTR("-----"), 5);
++static const SecByteBlock SBB_PEM_END(BYTE_PTR("-----END"), 8);
++
++static const SecByteBlock SBB_PUBLIC_BEGIN(StringToSecByteBlock(LBL_PUBLIC_BEGIN));
++static const SecByteBlock SBB_PUBLIC_END(StringToSecByteBlock(LBL_PUBLIC_END));
++
++static const SecByteBlock SBB_PRIVATE_BEGIN(StringToSecByteBlock(LBL_PRIVATE_BEGIN));
++static const SecByteBlock SBB_PRIVATE_END(StringToSecByteBlock(LBL_PRIVATE_END));
++
++static const SecByteBlock SBB_RSA_PUBLIC_BEGIN(StringToSecByteBlock(LBL_RSA_PUBLIC_BEGIN));
++static const SecByteBlock SBB_RSA_PUBLIC_END(StringToSecByteBlock(LBL_RSA_PUBLIC_END));
++
++static const SecByteBlock SBB_RSA_PRIVATE_BEGIN(StringToSecByteBlock(LBL_RSA_PRIVATE_BEGIN));
++static const SecByteBlock SBB_RSA_PRIVATE_END(StringToSecByteBlock(LBL_RSA_PRIVATE_END));
++
++static const SecByteBlock SBB_DSA_PUBLIC_BEGIN(StringToSecByteBlock(LBL_DSA_PUBLIC_BEGIN));
++static const SecByteBlock SBB_DSA_PUBLIC_END(StringToSecByteBlock(LBL_DSA_PUBLIC_END));
++
++static const SecByteBlock SBB_DSA_PRIVATE_BEGIN(StringToSecByteBlock(LBL_DSA_PRIVATE_BEGIN));
++static const SecByteBlock SBB_DSA_PRIVATE_END(StringToSecByteBlock(LBL_DSA_PRIVATE_END));
++
++static const SecByteBlock SBB_EC_PUBLIC_BEGIN(StringToSecByteBlock(LBL_EC_PUBLIC_BEGIN));
++static const SecByteBlock SBB_EC_PUBLIC_END(StringToSecByteBlock(LBL_EC_PUBLIC_END));
++
++static const SecByteBlock SBB_ECDSA_PUBLIC_BEGIN(StringToSecByteBlock(LBL_ECDSA_PUBLIC_BEGIN));
++static const SecByteBlock SBB_ECDSA_PUBLIC_END(StringToSecByteBlock(LBL_ECDSA_PUBLIC_END));
++
++static const SecByteBlock SBB_EC_PRIVATE_BEGIN(StringToSecByteBlock(LBL_EC_PRIVATE_BEGIN));
++static const SecByteBlock SBB_EC_PRIVATE_END(StringToSecByteBlock(LBL_EC_PRIVATE_END));
++
++static const SecByteBlock SBB_EC_PARAMETERS_BEGIN(StringToSecByteBlock(LBL_EC_PARAMETERS_BEGIN));
++static const SecByteBlock SBB_EC_PARAMETERS_END(StringToSecByteBlock(LBL_EC_PARAMETERS_END));
++
++static const SecByteBlock SBB_DH_PARAMETERS_BEGIN(StringToSecByteBlock(LBL_DH_PARAMETERS_BEGIN));
++static const SecByteBlock SBB_DH_PARAMETERS_END(StringToSecByteBlock(LBL_DH_PARAMETERS_END));
++
++static const SecByteBlock SBB_DSA_PARAMETERS_BEGIN(StringToSecByteBlock(LBL_DSA_PARAMETERS_BEGIN));
++static const SecByteBlock SBB_DSA_PARAMETERS_END(StringToSecByteBlock(LBL_DSA_PARAMETERS_END));
++
++static const SecByteBlock SBB_CERTIFICATE_BEGIN(StringToSecByteBlock(LBL_CERTIFICATE_BEGIN));
++static const SecByteBlock SBB_CERTIFICATE_END(StringToSecByteBlock(LBL_CERTIFICATE_END));
++
++static const SecByteBlock SBB_X509_CERTIFICATE_BEGIN(StringToSecByteBlock(LBL_X509_CERTIFICATE_BEGIN));
++static const SecByteBlock SBB_X509_CERTIFICATE_END(StringToSecByteBlock(LBL_X509_CERTIFICATE_END));
++
++static const SecByteBlock SBB_REQ_CERTIFICATE_BEGIN(StringToSecByteBlock(LBL_REQ_CERTIFICATE_BEGIN));
++static const SecByteBlock SBB_REQ_CERTIFICATE_END(StringToSecByteBlock(LBL_REQ_CERTIFICATE_END));
++
++static const SecByteBlock SBB_PROC_TYPE(StringToSecByteBlock(LBL_PROC_TYPE));
++static const SecByteBlock SBB_PROC_TYPE_ENC(StringToSecByteBlock(LBL_PROC_TYPE_ENC));
++static const SecByteBlock SBB_DEK_INFO(StringToSecByteBlock(LBL_DEK_INFO));
++static const SecByteBlock SBB_CONTENT_DOMAIN(StringToSecByteBlock(LBL_CONTENT_DOMAIN));
++static const SecByteBlock SBB_ENCRYPTED(StringToSecByteBlock(LBL_ENCRYPTED));
++static const SecByteBlock SBB_COMMA(StringToSecByteBlock(LBL_COMMA));
++static const SecByteBlock SBB_SPACE(StringToSecByteBlock(LBL_SPACE));
++static const SecByteBlock SBB_COLON(StringToSecByteBlock(LBL_COLON));
++
++NAMESPACE_END
++
++#endif // CRYPTOPP_PEM_COM_H
+Index: libcrypto++-5.6.0/pem-create-keys.sh
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-create-keys.sh
+@@ -0,0 +1,45 @@
++#! /bin/sh
++
++# Script to create the test keys used pem-test.cpp
++
++# RSA private key, public key, and encrypted private key
++openssl genrsa -out rsa-priv.pem 1024
++openssl rsa -in rsa-priv.pem -out rsa-pub.pem -pubout
++openssl rsa -in rsa-priv.pem -out rsa-enc-priv.pem -aes128 -passout pass:test
++
++# DSA private key, public key, and encrypted private key
++openssl dsaparam -out dsa-params.pem 1024
++openssl gendsa -out dsa-priv.pem dsa-params.pem
++openssl dsa -in dsa-priv.pem -out dsa-pub.pem -pubout
++openssl dsa -in dsa-priv.pem -out dsa-enc-priv.pem -aes128 -passout pass:test
++
++# EC private key, public key, and encrypted private key
++openssl ecparam -out ec-params.pem -name secp256k1 -genkey
++openssl ec -in ec-params.pem -out ec-priv.pem
++openssl ec -in ec-priv.pem -out ec-pub.pem -pubout
++openssl ec -in ec-priv.pem -out ec-enc-priv.pem -aes128 -passout pass:test
++
++openssl dhparam -out dh-params.pem 512
++
++# Only the '-----BEGIN PUBLIC KEY-----'
++echo "-----BEGIN PUBLIC KEY-----" > rsa-short.pem
++
++# Two keys in one file
++cat rsa-pub.pem > rsa-pub-double.pem
++cat rsa-pub.pem >> rsa-pub-double.pem
++
++# Removes last CR or LF (or CRLF)
++perl -pe 'chomp if eof' rsa-pub.pem > rsa-trunc-1.pem
++
++# This gets the last CR or LF and one of the dashes (should throw)
++perl -pe 'chop if eof' rsa-trunc-1.pem > rsa-trunc-2.pem
++
++# Two keys in one file; missing CRLF between them
++cat rsa-trunc-1.pem > rsa-concat.pem
++cat rsa-pub.pem >> rsa-concat.pem
++
++# Download cacert.pem. Its got 150 or so we can parse
++
++if [ ! -e "cacert.pem" ]; then
++  wget http://curl.haxx.se/ca/cacert.pem
++fi
+Index: libcrypto++-5.6.0/pem-rd.cpp
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-rd.cpp
+@@ -0,0 +1,1194 @@
++// pem-rd.cpp - PEM read routines. Written and placed in the public domain by Jeffrey Walton
++//              Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++///////////////////////////////////////////////////////////////////////////
++// For documentation on the PEM read and write routines, see
++//   http://www.cryptopp.com/wiki/PEM_Pack
++///////////////////////////////////////////////////////////////////////////
++
++#include <string>
++using std::string;
++
++#include <algorithm>
++using std::search;
++using std::min;
++using std::max;
++
++#include <memory>
++using std::auto_ptr;
++
++#if !defined(NDEBUG)
++# include <iostream>
++#endif
++
++#include <cctype>
++#include <cassert>
++
++#include "cryptlib.h"
++#include "secblock.h"
++#include "nbtheory.h"
++#include "gfpcrypt.h"
++#include "camellia.h"
++#include "filters.h"
++#include "base64.h"
++#include "queue.h"
++#include "modes.h"
++#include "asn.h"
++#include "aes.h"
++#include "idea.h"
++#include "des.h"
++#include "hex.h"
++
++#include "pem.h"
++#include "pem-com.h"
++
++#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
++#include "md5.h"
++
++NAMESPACE_BEGIN(CryptoPP)
++
++// Info from the encapsulated header
++struct EncapsulatedHeader
++{
++    string m_version;
++    string m_operation;
++    string m_algorithm;
++    
++    string m_iv;
++    //string m_salt;
++    
++    //SecByteBlock m_key;
++    
++    //unsigned int m_count;
++};
++
++static size_t PEM_ReadLine(BufferedTransformation& source, SecByteBlock& line, SecByteBlock& ending);
++
++static PEM_Type PEM_GetType(const SecByteBlock& sb);
++
++static void PEM_StripEncapsulatedBoundary(BufferedTransformation& bt, const SecByteBlock& pre, const SecByteBlock& post);
++static void PEM_StripEncapsulatedBoundary(SecByteBlock& sb, const SecByteBlock& pre, const SecByteBlock& post);
++
++static void PEM_StripEncapsulatedHeader(BufferedTransformation& src, BufferedTransformation& dest, EncapsulatedHeader& header);
++
++static void PEM_CipherForAlgorithm(const EncapsulatedHeader& header, const char* password, size_t length, auto_ptr<StreamTransformation>& stream);
++
++static void PEM_DecodeAndDecrypt(BufferedTransformation& src, BufferedTransformation& dest, const char* password, size_t length);
++static void PEM_Decrypt(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream);
++
++static bool PEM_IsEncrypted(SecByteBlock& sb);
++static bool PEM_IsEncrypted(BufferedTransformation& bt);
++
++static void PEM_ParseVersion(const string& proctype, string& version);
++static void PEM_ParseOperation(const string& proctype, string& operation);
++
++static void PEM_ParseAlgorithm(const string& dekinfo, string& algorithm);
++static void PEM_ParseIV(const string& dekinfo, string& iv);
++
++static inline SecByteBlock::const_iterator Search(const SecByteBlock& source, const SecByteBlock& target);
++
++template <class EC>
++static void PEM_LoadParams(BufferedTransformation& bt, DL_GroupParameters_EC<EC>& params);
++
++static void PEM_LoadPublicKey(BufferedTransformation& bt, X509PublicKey& key);
++static void PEM_LoadPrivateKey(BufferedTransformation& bt, PKCS8PrivateKey& key);
++
++// Crypto++ expects {version,x}; OpenSSL writes {version,x,y,p,q,g}
++static void PEM_LoadPrivateKey(BufferedTransformation& bt, DSA::PrivateKey& key);
++
++//////////////////////////////////////////////////////////////////////////////
++//////////////////////////////////////////////////////////////////////////////
++
++void PEM_Load(BufferedTransformation& bt, RSA::PublicKey& rsa)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    else if(type == PEM_RSA_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_RSA_PUBLIC_BEGIN, SBB_RSA_PUBLIC_END);
++    else
++        throw InvalidDataFormat("PEM_Load: not a RSA public key");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPublicKey(temp, rsa);
++}
++
++void PEM_Load(BufferedTransformation& bt, RSA::PrivateKey& rsa)
++{
++    return PEM_Load(bt, rsa, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, RSA::PrivateKey& rsa, const char* password, size_t length)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PRIVATE_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PRIVATE_BEGIN, SBB_PRIVATE_END);
++    else if(type == PEM_RSA_PRIVATE_KEY || (type == PEM_RSA_ENC_PRIVATE_KEY && password != NULL))
++        PEM_StripEncapsulatedBoundary(obj, SBB_RSA_PRIVATE_BEGIN, SBB_RSA_PRIVATE_END);
++    else if(type == PEM_RSA_ENC_PRIVATE_KEY && password == NULL)
++        throw InvalidArgument("PEM_Load: RSA private key is encrypted");
++    else
++        throw InvalidDataFormat("PEM_Load: not a RSA private key");
++    
++    ByteQueue temp;
++    if(type == PEM_RSA_ENC_PRIVATE_KEY)
++        PEM_DecodeAndDecrypt(obj, temp, password, length);
++    else
++        PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPrivateKey(temp, rsa);
++}
++
++void PEM_Load(BufferedTransformation& bt, DSA::PublicKey& dsa)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    else if(type == PEM_DSA_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_DSA_PUBLIC_BEGIN, SBB_DSA_PUBLIC_END);
++    else
++        throw InvalidDataFormat("PEM_Load: not a DSA public key");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPublicKey(temp, dsa);
++}
++
++void PEM_Load(BufferedTransformation& bt, DSA::PrivateKey& dsa)
++{
++    return PEM_Load(bt, dsa, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, DSA::PrivateKey& dsa, const char* password, size_t length)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PRIVATE_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PRIVATE_BEGIN, SBB_PRIVATE_END);
++    else if(type == PEM_DSA_PRIVATE_KEY || (type == PEM_DSA_ENC_PRIVATE_KEY && password != NULL))
++        PEM_StripEncapsulatedBoundary(obj, SBB_DSA_PRIVATE_BEGIN, SBB_DSA_PRIVATE_END);
++    else if(type == PEM_DSA_ENC_PRIVATE_KEY && password == NULL)
++        throw InvalidArgument("PEM_Load: DSA private key is encrypted");
++    else
++        throw InvalidDataFormat("PEM_Load: not a DSA private key");
++    
++    ByteQueue temp;
++    if(type == PEM_DSA_ENC_PRIVATE_KEY)
++        PEM_DecodeAndDecrypt(obj, temp, password, length);
++    else
++        PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPrivateKey(temp, dsa);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_EC<ECP>& params)
++{
++    PEM_LoadParams(bt, params);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_EC<EC2N>& params)
++{
++    PEM_LoadParams(bt, params);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PublicKey_EC<ECP>& ec)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    else if(type == PEM_EC_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_EC_PUBLIC_BEGIN, SBB_EC_PUBLIC_END);
++    else
++        throw InvalidDataFormat("PEM_Load: not a public EC key");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPublicKey(temp, ec);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<ECP>& ec)
++{
++    return PEM_Load(bt, ec, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<ECP>& ec, const char* password, size_t length)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PRIVATE_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PRIVATE_BEGIN, SBB_PRIVATE_END);
++    else if(type == PEM_EC_PRIVATE_KEY || (type == PEM_EC_ENC_PRIVATE_KEY && password != NULL))
++        PEM_StripEncapsulatedBoundary(obj, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END);
++    else if(type == PEM_EC_ENC_PRIVATE_KEY && password == NULL)
++        throw InvalidArgument("PEM_Load: EC private key is encrypted");
++    else
++        throw InvalidDataFormat("PEM_Load: not a private EC key");
++    
++    ByteQueue temp;
++    if(type == PEM_EC_ENC_PRIVATE_KEY)
++        PEM_DecodeAndDecrypt(obj, temp, password, length);
++    else
++        PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPrivateKey(temp, ec);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PublicKey_EC<EC2N>& ec)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    else if(type == PEM_EC_PUBLIC_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_EC_PUBLIC_BEGIN, SBB_EC_PUBLIC_END);
++    else
++        throw InvalidDataFormat("PEM_Load: not a public EC key");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPublicKey(temp, ec);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<EC2N>& ec)
++{
++    return PEM_Load(bt, ec, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<EC2N>& ec, const char* password, size_t length)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_PRIVATE_KEY)
++        PEM_StripEncapsulatedBoundary(obj, SBB_PRIVATE_BEGIN, SBB_PRIVATE_END);
++    else if(type == PEM_EC_PRIVATE_KEY || (type == PEM_EC_ENC_PRIVATE_KEY && password != NULL))
++        PEM_StripEncapsulatedBoundary(obj, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END);
++    else if(type == PEM_EC_ENC_PRIVATE_KEY && password == NULL)
++        throw InvalidArgument("PEM_Load: EC private key is encrypted");
++    else
++        throw InvalidDataFormat("PEM_Load: not a private EC key");
++    
++    ByteQueue temp;
++    if(type == PEM_EC_ENC_PRIVATE_KEY)
++        PEM_DecodeAndDecrypt(obj, temp, password, length);
++    else
++        PEM_Base64Decode(obj, temp);
++    
++    PEM_LoadPrivateKey(temp, ec);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa)
++{
++    return PEM_Load(bt, ecdsa, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa, const char* password, size_t length)
++{
++    PEM_Load(bt, dynamic_cast<DL_PrivateKey_EC<ECP>&>(ecdsa), password, length);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<EC2N>::PrivateKey& ecdsa)
++{
++    return PEM_Load(bt, ecdsa, NULL, 0);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<EC2N>::PrivateKey& ecdsa, const char* password, size_t length)
++{
++    PEM_Load(bt, dynamic_cast<DL_PrivateKey_EC<EC2N>&>(ecdsa), password, length);
++}
++
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_DSA& params)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_DSA_PARAMETERS)
++        PEM_StripEncapsulatedBoundary(obj, SBB_DSA_PARAMETERS_BEGIN, SBB_DSA_PARAMETERS_END);
++    else
++        throw InvalidDataFormat("PEM_Read: invalid DSA parameters");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    params.Load(temp);
++}
++
++template < class EC >
++void PEM_LoadParams(BufferedTransformation& bt, DL_GroupParameters_EC<EC>& params)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_EC_PARAMETERS)
++        PEM_StripEncapsulatedBoundary(obj, SBB_EC_PARAMETERS_BEGIN, SBB_EC_PARAMETERS_END);
++    else
++        throw InvalidDataFormat("PEM_Read: invalid EC parameters");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    params.BERDecode(temp);
++}
++
++void PEM_DH_Load(BufferedTransformation& bt, Integer& p, Integer& g)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_DH_PARAMETERS)
++        PEM_StripEncapsulatedBoundary(obj, SBB_DH_PARAMETERS_BEGIN, SBB_DH_PARAMETERS_END);
++    else
++        throw InvalidDataFormat("PEM_DH_Read: invalid DH parameters");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    BERSequenceDecoder dh(temp);
++    p.BERDecode(dh);
++    g.BERDecode(dh);
++    dh.MessageEnd();
++    
++#if PEM_KEY_OR_PARAMETER_VALIDATION
++    AutoSeededRandomPool prng;
++    if(!VerifyPrime(prng, p, 3))
++        throw Exception(Exception::OTHER_ERROR, "PEM_DH_Read: p is not prime");
++    
++    // https://crypto.stackexchange.com/questions/12961/diffie-hellman-parameter-check-when-g-2-must-p-mod-24-11
++    long residue = p % 24;
++    if(residue != 11 && residue != 23)
++        throw Exception(Exception::OTHER_ERROR, "PEM_DH_Read: g is not a suitable generator");
++#endif
++}
++
++void PEM_DH_Load(BufferedTransformation& bt, Integer& p, Integer& q, Integer& g)
++{
++    ByteQueue obj;
++    PEM_NextObject(bt, obj);
++    
++    PEM_Type type = PEM_GetType(obj);
++    if(type == PEM_DH_PARAMETERS)
++        PEM_StripEncapsulatedBoundary(obj, SBB_DH_PARAMETERS_BEGIN, SBB_DH_PARAMETERS_END);
++    else
++        throw InvalidDataFormat("PEM_DH_Read: invalid DH parameters");
++    
++    ByteQueue temp;
++    PEM_Base64Decode(obj, temp);
++    
++    BERSequenceDecoder dh(temp);
++    p.BERDecode(dh);
++    q.BERDecode(dh);
++    g.BERDecode(dh);
++    dh.MessageEnd();
++    
++#if PEM_KEY_OR_PARAMETER_VALIDATION
++    AutoSeededRandomPool prng;
++    if(!VerifyPrime(prng, p, 3))
++        throw Exception(Exception::OTHER_ERROR, "PEM_DH_Read: p is not prime");
++    
++    // https://crypto.stackexchange.com/questions/12961/diffie-hellman-parameter-check-when-g-2-must-p-mod-24-11
++    long residue = p % 24;
++    if(residue != 11 && residue != 23)
++        throw Exception(Exception::OTHER_ERROR, "PEM_DH_Read: g is not a suitable generator");
++#endif
++}
++
++void PEM_LoadPublicKey(BufferedTransformation& src, X509PublicKey& key)
++{
++    X509PublicKey& pk = dynamic_cast<X509PublicKey&>(key);
++    pk.BERDecode(src);
++    
++#if PEM_KEY_OR_PARAMETER_VALIDATION
++    AutoSeededRandomPool prng;
++    if(!pk.Validate(prng, 2))
++        throw Exception(Exception::OTHER_ERROR, "PEM_LoadPublicKey: key validation failed");
++#endif
++}
++
++void PEM_LoadPrivateKey(BufferedTransformation& src, PKCS8PrivateKey& key)
++{
++    key.BERDecodePrivateKey(src, 0, src.MaxRetrievable());
++    
++#if PEM_KEY_OR_PARAMETER_VALIDATION
++    AutoSeededRandomPool prng;
++    if(!key.Validate(prng, 2))
++        throw Exception(Exception::OTHER_ERROR, "PEM_LoadPrivateKey: key validation failed");
++#endif
++}
++
++void PEM_LoadPrivateKey(BufferedTransformation& bt, DSA::PrivateKey& key)
++{
++    // Crypto++ expects {version,x}, while OpenSSL provides {version,p,q,g,y,x}.
++    BERSequenceDecoder seq(bt);
++    
++    word32 v;
++    BERDecodeUnsigned<word32>(seq, v, INTEGER, 0, 0);	// check version
++    
++    Integer p,q,g,y,x;
++    
++    p.BERDecode(seq);
++    q.BERDecode(seq);
++    g.BERDecode(seq);
++    y.BERDecode(seq);
++    x.BERDecode(seq);
++    
++    seq.MessageEnd();
++    
++    key.Initialize(p, q, g, x);
++    
++#if PEM_KEY_OR_PARAMETER_VALIDATION
++    AutoSeededRandomPool prng;
++    if(!key.Validate(prng, 2))
++        throw Exception(Exception::OTHER_ERROR, "PEM_LoadPrivateKey: key validation failed");
++#endif
++}
++
++bool PEM_IsEncrypted(BufferedTransformation& bt)
++{
++    const size_t size = bt.MaxRetrievable();
++    SecByteBlock sb(size);
++    bt.Peek(sb.data(), sb.size());
++    
++    return PEM_IsEncrypted(sb);
++}
++
++bool PEM_IsEncrypted(SecByteBlock& sb)
++{
++    SecByteBlock::iterator it = search(sb.begin(), sb.end(), SBB_PROC_TYPE.begin(), SBB_PROC_TYPE.end());
++    if (it == sb.end()) return false;
++    
++    it = search(it + SBB_PROC_TYPE.size(), sb.end(), SBB_ENCRYPTED.begin(), SBB_ENCRYPTED.end());
++    return it != sb.end();
++}
++
++void PEM_CipherForAlgorithm(const EncapsulatedHeader& header, const char* password, size_t length, auto_ptr<StreamTransformation>& stream)
++{
++    unsigned int ksize, vsize;
++    
++    string algorithm(header.m_algorithm);
++    std::transform(algorithm.begin(), algorithm.end(), algorithm.begin(),  (int(*)(int))std::toupper);
++    
++    if(algorithm == "AES-256-CBC")
++    {
++        ksize = 32;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Decryption);
++    }
++    else if(algorithm == "AES-192-CBC")
++    {
++        ksize = 24;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Decryption);
++    }
++    else if(algorithm == "AES-128-CBC")
++    {
++        ksize = 16;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Decryption);
++    }
++    else if(algorithm == "CAMELLIA-256-CBC")
++    {
++        ksize = 32;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Decryption);
++    }
++    else if(algorithm == "CAMELLIA-192-CBC")
++    {
++        ksize = 24;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Decryption);
++    }
++    else if(algorithm == "CAMELLIA-128-CBC")
++    {
++        ksize = 16;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Decryption);
++    }
++    else if(algorithm == "DES-EDE3-CBC")
++    {
++        ksize = 24;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<DES_EDE3>::Decryption);
++    }
++    else if(algorithm == "IDEA-CBC")
++    {
++        ksize = 16;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<IDEA>::Decryption);
++    }
++    else if(algorithm == "DES-CBC")
++    {
++        ksize = 8;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<DES>::Decryption);
++    }
++    else
++    {
++        throw NotImplemented("PEM_CipherForAlgorithm: '" + header.m_algorithm + "' is not implemented");
++    }
++    
++    const unsigned char* _pword = reinterpret_cast<const unsigned char*>(password);
++    const size_t _plen = length;
++    
++    // Decode the IV. It used as the Salt in EVP_BytesToKey,
++    //   and its used as the IV in the cipher.
++    HexDecoder hex;
++    hex.Put((const byte*)header.m_iv.data(), header.m_iv.size());
++    hex.MessageEnd();
++    
++    // If the IV size is wrong, SetKeyWithIV will throw an exception.
++    size_t size = hex.MaxRetrievable();
++    size = std::min(size, static_cast<size_t>(vsize));
++    
++    SecByteBlock _key(ksize);
++    SecByteBlock _iv(size);
++    SecByteBlock _salt(size);
++    
++    hex.Get(_iv.data(), _iv.size());
++    
++    // The IV pulls double duty. First, the first PKCS5_SALT_LEN bytes are used
++    //   as the Salt in EVP_BytesToKey. Second, its used as the IV in the cipher.
++    _salt = _iv;
++    assert(_salt.size() >= OPENSSL_PKCS5_SALT_LEN);
++    
++    // MD5 is engrained OpenSSL goodness. MD5, IV and Password are IN; KEY is OUT.
++    //   {NULL,0} parameters are the OUT IV. However, the original IV in the PEM
++    //   header is used; and not the derived IV.
++    Weak::MD5 md5;
++    int ret = OPENSSL_EVP_BytesToKey(md5, _iv.data(), _pword, _plen, 1, _key.data(), _key.size(), NULL, 0);
++    if(ret != static_cast<int>(ksize))
++        throw Exception(Exception::OTHER_ERROR, "PEM_CipherForAlgorithm: EVP_BytesToKey failed");
++    
++    SymmetricCipher* cipher = dynamic_cast<SymmetricCipher*>(stream.get());
++    assert(cipher != NULL);
++    
++    cipher->SetKeyWithIV(_key.data(), _key.size(), _iv.data(), _iv.size());
++}
++
++void PEM_DecodeAndDecrypt(BufferedTransformation& src, BufferedTransformation& dest, const char* password, size_t length)
++{
++    ByteQueue temp1;
++    EncapsulatedHeader header;
++    PEM_StripEncapsulatedHeader(src, temp1, header);
++    
++    ByteQueue temp2;
++    PEM_Base64Decode(temp1, temp2);
++    
++    auto_ptr<StreamTransformation> stream;
++    PEM_CipherForAlgorithm(header, password, length, stream);
++    
++    PEM_Decrypt(temp2, dest, stream);
++}
++
++void PEM_Decrypt(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream)
++{
++    try
++    {
++        StreamTransformationFilter filter(*stream, new Redirector(dest));
++        src.TransferTo(filter);
++        filter.MessageEnd();
++    }
++    catch (const Exception& ex)
++    {
++        string message(ex.what());
++        size_t pos = message.find(":");
++        if(pos != string::npos && pos+2 < message.size())
++            message = message.substr(pos+2);
++        
++        throw Exception(Exception::OTHER_ERROR, string("PEM_Decrypt: ") + message);
++    }
++}
++
++PEM_Type PEM_GetType(const BufferedTransformation& bt)
++{
++    const size_t size = bt.MaxRetrievable();
++    SecByteBlock sb(size);
++    
++    bt.Peek(sb.data(), sb.size());
++    return PEM_GetType(sb);
++}
++
++PEM_Type PEM_GetType(const SecByteBlock& sb)
++{
++    SecByteBlock::const_iterator it;
++    
++    it = Search(sb, SBB_PUBLIC_BEGIN);
++    if(it != sb.end())
++        return PEM_PUBLIC_KEY;
++    
++    // RSA key types
++    it = Search(sb, SBB_RSA_PUBLIC_BEGIN);
++    if(it != sb.end())
++        return PEM_RSA_PUBLIC_KEY;
++    
++    it = Search(sb, SBB_RSA_PRIVATE_BEGIN);
++    if(it != sb.end())
++    {
++        it = Search(sb, SBB_PROC_TYPE_ENC);
++        if(it != sb.end())
++            return PEM_RSA_ENC_PRIVATE_KEY;
++        
++        return PEM_RSA_PRIVATE_KEY;
++    }
++    
++    // DSA key types
++    it = Search(sb, SBB_DSA_PUBLIC_BEGIN);
++    if(it != sb.end())
++        return PEM_DSA_PUBLIC_KEY;
++    
++    it = Search(sb, SBB_DSA_PRIVATE_BEGIN);
++    if(it != sb.end())
++    {
++        it = Search(sb, SBB_PROC_TYPE_ENC);
++        if(it != sb.end())
++            return PEM_DSA_ENC_PRIVATE_KEY;
++        
++        return PEM_DSA_PRIVATE_KEY;
++    }
++    
++    // EC key types
++    it = Search(sb, SBB_EC_PUBLIC_BEGIN);
++    if(it != sb.end())
++        return PEM_EC_PUBLIC_KEY;
++    
++    it = Search(sb, SBB_ECDSA_PUBLIC_BEGIN);
++    if(it != sb.end())
++        return PEM_ECDSA_PUBLIC_KEY;
++    
++    it = Search(sb, SBB_EC_PRIVATE_BEGIN);
++    if(it != sb.end())
++    {
++        it = Search(sb, SBB_PROC_TYPE_ENC);
++        if(it != sb.end())
++            return PEM_EC_ENC_PRIVATE_KEY;
++        
++        return PEM_EC_PRIVATE_KEY;
++    }
++    
++    // EC Parameters
++    it = Search(sb, SBB_EC_PARAMETERS_BEGIN);
++    if(it != sb.end())
++        return PEM_EC_PARAMETERS;
++    
++    // DH Parameters
++    it = Search(sb, SBB_DH_PARAMETERS_BEGIN);
++    if(it != sb.end())
++        return PEM_DH_PARAMETERS;
++    
++    // DSA Parameters
++    it = Search(sb, SBB_DSA_PARAMETERS_BEGIN);
++    if(it != sb.end())
++        return PEM_DSA_PARAMETERS;
++    
++    // Certificate
++    it = Search(sb, SBB_CERTIFICATE_BEGIN);
++    if(it != sb.end())
++        return PEM_CERTIFICATE;
++    
++    it = Search(sb, SBB_X509_CERTIFICATE_BEGIN);
++    if(it != sb.end())
++        return PEM_X509_CERTIFICATE;
++    
++    it = Search(sb, SBB_REQ_CERTIFICATE_BEGIN);
++    if(it != sb.end())
++        return PEM_REQ_CERTIFICATE;
++    
++    return PEM_UNSUPPORTED;
++}
++
++void PEM_StripEncapsulatedBoundary(BufferedTransformation& bt, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    ByteQueue temp;
++    SecByteBlock::const_iterator it;
++    int n = 1, prePos = -1, postPos = -1;
++    
++    while(bt.AnyRetrievable() && n++)
++    {
++        SecByteBlock line, unused;
++        PEM_ReadLine(bt, line, unused);
++        
++        // The write associated with an empty line must to occur. Otherwise, we loose the CR or LF
++        //    in an ecrypted private key between the control fields and the encapsulated text.
++        //if(line.empty())
++        //    continue;
++        
++        it = Search(line, pre);
++        if(it != line.end())
++        {
++            prePos = n;
++            continue;
++        }
++        it = Search(line, post);
++        if(it != line.end())
++        {
++            postPos = n;
++            continue;
++        }
++        
++        PEM_WriteLine(temp, line);
++    }
++    
++    if(prePos == -1)
++    {
++        string msg = "PEM_StripEncapsulatedBoundary: '";
++        msg += string((char*)pre.data(), pre.size()) + "' not found";
++        throw InvalidDataFormat(msg);
++    }
++    
++    if(postPos == -1)
++    {
++        string msg = "PEM_StripEncapsulatedBoundary: '";
++        msg += string((char*)post.data(), post.size()) + "' not found";
++        throw InvalidDataFormat(msg);
++    }
++    
++    if(prePos > postPos)
++        throw InvalidDataFormat("PEM_StripEncapsulatedBoundary: header boundary follows footer boundary");
++    
++    temp.TransferTo(bt);
++}
++
++void PEM_StripEncapsulatedHeader(BufferedTransformation& src, BufferedTransformation& dest, EncapsulatedHeader& header)
++{
++    if(!src.AnyRetrievable())
++        return;
++    
++    SecByteBlock line, ending;
++    size_t size = 0;
++    
++    // The first line *must* be Proc-Type. Ensure we read it before dropping into the loop.
++    size = PEM_ReadLine(src, line, ending);
++    if(size == 0 || line.empty())
++        throw InvalidDataFormat("PEM_StripEncapsulatedHeader: failed to locate Proc-Type");
++    
++    SecByteBlock field = GetControlField(line);
++    if(field.empty())
++        throw InvalidDataFormat("PEM_StripEncapsulatedHeader: failed to locate Proc-Type");
++    
++    if(0 != CompareNoCase(field, SBB_PROC_TYPE))
++        throw InvalidDataFormat("PEM_StripEncapsulatedHeader: failed to locate Proc-Type");
++    
++    line = GetControlFieldData(line);
++    string tline(reinterpret_cast<const char*>(line.data()),line.size());
++    
++    PEM_ParseVersion(tline, header.m_version);
++    if(header.m_version != "4")
++        throw NotImplemented("PEM_StripEncapsulatedHeader: encryption version " + header.m_version + " not supported");
++    
++    PEM_ParseOperation(tline, header.m_operation);
++    if(header.m_operation != "ENCRYPTED")
++        throw NotImplemented("PEM_StripEncapsulatedHeader: operation " + header.m_operation + " not supported");
++    
++    // Next, we have to read until the first empty line
++    while(true)
++    {
++        if(!src.AnyRetrievable()) break; // End Of Buffer
++        
++        size = PEM_ReadLine(src, line, ending);
++        if(size == 0) break;        // End Of Buffer
++        if(line.size() == 0) break; // size is non-zero; empty line
++        
++        field = GetControlField(line);
++        if(0 == CompareNoCase(field, SBB_DEK_INFO))
++        {
++            line = GetControlFieldData(line);
++            tline = string(reinterpret_cast<const char*>(line.data()),line.size());
++            
++            PEM_ParseAlgorithm(tline, header.m_algorithm);
++            PEM_ParseIV(tline, header.m_iv);
++            
++            continue;
++        }
++        
++        if(0 == CompareNoCase(field, SBB_CONTENT_DOMAIN))
++        {
++            // Silently ignore
++            // Content-Domain: RFC822
++            continue;
++        }
++        
++        if(!field.empty())
++        {
++            const char* ptr = (char*)field.begin();
++            size_t len = field.size();
++            
++            string m(ptr, len);
++            throw NotImplemented("PEM_StripEncapsulatedHeader: " + m + " not supported");
++        }
++    }
++    
++    if(header.m_algorithm.empty())
++        throw InvalidArgument("PEM_StripEncapsulatedHeader: no encryption algorithm");
++    
++    if(header.m_iv.empty())
++        throw InvalidArgument("PEM_StripEncapsulatedHeader: no IV present");
++    
++    // After the empty line is the encapsulated text. Transfer it to the destination.
++    src.TransferTo(dest);
++}
++
++// The string will be similar to " 4, ENCRYPTED"
++void PEM_ParseVersion(const string& proctype, string& version)
++{
++    size_t pos1 = 0;
++    while(pos1 < proctype.size() && isspace(proctype[pos1])) pos1++;
++    
++    size_t pos2 = proctype.find(LBL_COMMA);
++    if(pos2 == string::npos)
++        throw InvalidDataFormat("PEM_ParseVersion: failed to locate version");
++    
++    while(pos2 > pos1 && isspace(proctype[pos2])) pos2--;
++    version = proctype.substr(pos1, pos2 - pos1);
++}
++
++// The string will be similar to " 4, ENCRYPTED"
++void PEM_ParseOperation(const string& proctype, string& operation)
++{
++    size_t pos1 = proctype.find(LBL_COMMA);
++    if(pos1 == string::npos)
++        throw InvalidDataFormat("PEM_ParseOperation: failed to locate operation");
++    
++    pos1++;
++    while(pos1 < proctype.size() && isspace(proctype[pos1])) pos1++;
++    
++    operation = proctype.substr(pos1, string::npos);
++    std::transform(operation.begin(), operation.end(), operation.begin(), (int(*)(int))std::toupper);
++}
++
++// The string will be similar to " AES-128-CBC, XXXXXXXXXXXXXXXX"
++void PEM_ParseAlgorithm(const string& dekinfo, string& algorithm)
++{
++    size_t pos1 = 0;
++    while(pos1 < dekinfo.size() && isspace(dekinfo[pos1])) pos1++;
++    
++    size_t pos2 = dekinfo.find(LBL_COMMA);
++    if(pos2 == string::npos)
++        throw InvalidDataFormat("PEM_ParseVersion: failed to locate algorithm");
++    
++    while(pos2 > pos1 && isspace(dekinfo[pos2])) pos2--;
++    
++    algorithm = dekinfo.substr(pos1, pos2 - pos1);
++    std::transform(algorithm.begin(), algorithm.end(), algorithm.begin(),  (int(*)(int))std::toupper);
++}
++
++// The string will be similar to " AES-128-CBC, XXXXXXXXXXXXXXXX"
++void PEM_ParseIV(const string& dekinfo, string& iv)
++{
++    size_t pos1 = dekinfo.find(LBL_COMMA);
++    if(pos1 == string::npos)
++        throw InvalidDataFormat("PEM_ParseIV: failed to locate initialization vector");
++    
++    pos1++;
++    while(pos1 < dekinfo.size() && isspace(dekinfo[pos1])) pos1++;
++    
++    iv = dekinfo.substr(pos1, string::npos);
++    std::transform(iv.begin(), iv.end(), iv.begin(), (int(*)(int))std::toupper);
++}
++
++void PEM_NextObject(BufferedTransformation& src, BufferedTransformation& dest, bool trimTrailing)
++{
++    if(!src.AnyRetrievable())
++        return;
++    
++    // We have four things to find:
++    //   1. -----BEGIN (the leading begin)
++    //   2. ----- (the trailing dashes)
++    //   3. -----END (the leading end)
++    //   4. ----- (the trailing dashes)
++    
++    // Once we parse something that purports to be PEM encoded, another routine
++    //  will have to look for something particular, like a RSA key. We *will*
++    //  inadvertently parse garbage, like -----BEGIN FOO BAR-----. It will
++    //  be caught later when a PEM_Load routine is called.
++    
++    static const size_t BAD_IDX = PEM_INVALID;
++    
++    // We use iterators for the search. However, an interator is invalidated
++    //  after each insert that grows the container. So we save indexes
++    //  from begin() to speed up searching. On each iteration, we simply
++    //  reinitialize them.
++    SecByteBlock::const_iterator it;
++    size_t idx1 = BAD_IDX, idx2 = BAD_IDX, idx3 = BAD_IDX, idx4 = BAD_IDX;
++    
++    // The idea is to read chunks in case there are multiple keys or
++    //  paramters in a BufferedTransformation. So we use CopyTo to
++    //  extract what we are interested in. We don't take anything
++    //  out of the BufferedTransformation (yet).
++    
++    // We also use indexes because the iterator will be invalidated
++    //   when we append to the ByteQueue. Even though the iterator
++    //   is invalid, `accum.begin() + index` will be valid.
++    
++    // Reading 8 or 10 lines at a time is an optimization from testing
++    //   against cacerts.pem. The file has 153 certs, so its a good test.
++    // +2 to allow for CR + LF line endings. There's no guarantee a line
++    //   will be present, or it will be RFC1421_LINE_BREAK in size.
++    static const size_t READ_SIZE = (RFC1421_LINE_BREAK + 1) * 10;
++    static const size_t REWIND = max(SBB_PEM_BEGIN.size(), SBB_PEM_END.size()) + 2;
++    
++    SecByteBlock accum;
++    size_t idx = 0, next = 0;
++    
++    size_t available = src.MaxRetrievable();
++    while(available)
++    {
++        // How much can we read?
++        const size_t size = std::min(available, READ_SIZE);
++        
++        // Ideally, we would only scan the line we are reading. However,
++        //   we need to rewind a bit in case a token spans the previous
++        //   block and the block we are reading. But we can't rewind
++        //   into a previous index. Once we find an index, the variable
++        //   next is set to it. Hence the reason for the max()
++        if(idx > REWIND)
++        {
++            const size_t x = idx - REWIND;
++            next = max(next, x);
++        }
++        
++#if 0
++        // Next should be less than index by 10 or so
++        std::cout << "  Index: " << idx << std::endl;
++        std::cout << "   Next: " << next << std::endl;
++#endif
++        
++        // We need a temp queue to use CopyRangeTo. We have to use it
++        //   because there's no Peek that allows us to peek a range.
++        ByteQueue tq;
++        src.CopyRangeTo(tq, static_cast<lword>(idx), static_cast<lword>(size));
++        
++        const size_t offset = accum.size();
++        accum.Grow(offset + size);
++        tq.Get(accum.data() + offset, size);
++        
++        // Adjust sizes
++        idx += size;
++        available -= size;
++        
++        // Locate '-----BEGIN'
++        if(idx1 == BAD_IDX)
++        {
++            it = search(accum.begin() + next, accum.end(), SBB_PEM_BEGIN.begin(), SBB_PEM_BEGIN.end());
++            if(it == accum.end())
++                continue;
++            
++            idx1 = it - accum.begin();
++            next = idx1 + SBB_PEM_BEGIN.size();
++        }
++        
++        // Locate '-----'
++        if(idx2 == BAD_IDX && idx1 != BAD_IDX)
++        {
++            it = search(accum.begin() + next, accum.end(), SBB_PEM_TAIL.begin(), SBB_PEM_TAIL.end());
++            if(it == accum.end())
++                continue;
++            
++            idx2 = it - accum.begin();
++            next = idx2 + SBB_PEM_TAIL.size();
++        }
++        
++        // Locate '-----END'
++        if(idx3 == BAD_IDX && idx2 != BAD_IDX)
++        {
++            it = search(accum.begin() + next, accum.end(), SBB_PEM_END.begin(), SBB_PEM_END.end());
++            if(it == accum.end())
++                continue;
++            
++            idx3 = it - accum.begin();
++            next = idx3 + SBB_PEM_END.size();
++        }
++        
++        // Locate '-----'
++        if(idx4 == BAD_IDX && idx3 != BAD_IDX)
++        {
++            it = search(accum.begin() + next, accum.end(), SBB_PEM_TAIL.begin(), SBB_PEM_TAIL.end());
++            if(it == accum.end())
++                continue;
++            
++            idx4 = it - accum.begin();
++            next = idx4 + SBB_PEM_TAIL.size();
++        }
++    }
++    
++    // Did we find `-----BEGIN XXX-----` (RFC 1421 calls this pre-encapsulated boundary)?
++    if(idx1 == BAD_IDX || idx2 == BAD_IDX)
++        throw InvalidDataFormat("PEM_NextObject: could not locate boundary header");
++    
++    // Did we find `-----END XXX-----` (RFC 1421 calls this post-encapsulated boundary)?
++    if(idx3 == BAD_IDX || idx4 == BAD_IDX)
++        throw InvalidDataFormat("PEM_NextObject: could not locate boundary footer");
++    
++    // *IF* the trailing '-----' occurred in the last 5 bytes in accum, then we might miss the
++    // End of Line. We need to peek 2 more bytes if available and append them to accum.
++    if(available >= 2)
++    {
++        ByteQueue tq;
++        src.CopyRangeTo(tq, static_cast<lword>(idx), static_cast<lword>(2));
++        
++        const size_t offset = accum.size();
++        accum.Grow(offset + 2);
++        tq.Get(accum.data() + offset, 2);
++    }
++    else if(available == 1)
++    {
++        ByteQueue tq;
++        src.CopyRangeTo(tq, static_cast<lword>(idx), static_cast<lword>(1));
++        
++        const size_t offset = accum.size();
++        accum.Grow(offset + 1);
++        tq.Get(accum.data() + offset, 1);
++    }
++    
++    // Final book keeping
++    const byte* ptr = accum.begin() + idx1;
++    const size_t used = idx4 + SBB_PEM_TAIL.size();
++    const size_t len = used - idx1;
++    
++    // Include one CR/LF if its available in the accumulator
++    next = idx1 + len;
++    size_t adjust = 0;
++    if(next < accum.size())
++    {
++        byte c1 = accum[next];
++        byte c2 = 0;
++        
++        if(next + 1 < accum.size())
++            c2 = accum[next + 1];
++        
++        // Longest match first
++        if(c1 == '\r' && c2 == '\n')
++            adjust = 2;
++        else if(c1 == '\r' || c1 == '\n')
++            adjust = 1;
++    }
++    
++    dest.Put(ptr, len + adjust);
++    dest.MessageEnd();
++    
++    src.Skip(used + adjust);
++    
++    if(trimTrailing)
++    {
++        while (src.AnyRetrievable())
++        {
++            byte b;
++            src.Peek(b);
++            
++            if(!isspace(b)) break;
++            src.Skip(1);
++        }
++    }
++}
++
++size_t PEM_ReadLine(BufferedTransformation& source, SecByteBlock& line, SecByteBlock& ending)
++{
++    if(!source.AnyRetrievable())
++    {
++        line.New(0);
++        ending.New(0);
++        
++        return 0;
++    }
++    
++    ByteQueue temp;
++    
++    while(source.AnyRetrievable())
++    {
++        byte b;
++        if(!source.Get(b))
++            throw Exception(Exception::OTHER_ERROR, "PEM_ReadLine: failed to read byte");
++        
++        // LF ?
++        if(b == '\n')
++        {
++            ending = LF;
++            break;
++        }
++        
++        // CR ?
++        if(b == '\r')
++        {
++            // CRLF ?
++            if(source.AnyRetrievable() && source.Peek(b))
++            {
++                if(b == '\n')
++                {
++                    source.Skip(1);
++                    
++                    ending = CRLF;
++                    break;
++                }
++            }
++            
++            ending = CR;
++            break;
++        }
++        
++        // Not End-of-Line, accumulate it.
++        temp.Put(b);
++    }
++    
++    if(temp.AnyRetrievable())
++    {
++        line.Grow(temp.MaxRetrievable());
++        temp.Get(line.data(), line.size());
++    }
++    else
++    {
++        line.New(0);
++        ending.New(0);
++    }
++    
++    // We return a line stripped of CRs and LFs. However, we return the actual number of
++    //   of bytes processed, including the CR and LF. A return of 0 means nothing was read.
++    //   A return of 1 means an empty line was read (CR or LF). A return of 2 could
++    //   mean an empty line was read (CRLF), or could mean 1 character was read. In
++    //   any case, line will hold whatever was parsed.
++    return line.size() + ending.size();
++}
++
++SecByteBlock::const_iterator Search(const SecByteBlock& source, const SecByteBlock& target)
++{
++    return search(source.begin(), source.end(), target.begin(), target.end());
++}
++
++NAMESPACE_END
+Index: libcrypto++-5.6.0/pem-test.cxx
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-test.cxx
+@@ -0,0 +1,330 @@
++// pem-test.cxx - PEM test routines. Written and placed in the public domain by Jeffrey Walton
++//                Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++// clang++ -DDEBUG=1 -g3 -O0 -Wall -Wextra -I./ pem-test.cpp -o pem-test.exe ./crypto++/libcrypto++.a
++// clang++ -DNDEBUG=1 -g3 -O2 -Wall -Wextra -I./ pem-test.cpp -o pem-test.exe ./crypto++/libcrypto++.a
++
++#ifdef NDEBUG
++# undef NDEBUG
++#endif
++
++#include <iostream>
++using std::ostream;
++using std::cin;
++using std::cout;
++using std::cerr;
++using std::endl;
++using std::ios;
++
++#include <string>
++using std::string;
++
++#include <cassert>
++
++#include "cryptlib.h"
++using CryptoPP::Exception;
++
++#include "dsa.h"
++using CryptoPP::DSA;
++
++#include "rsa.h"
++using CryptoPP::RSA;
++
++#include "files.h"
++using CryptoPP::FileSink;
++using CryptoPP::FileSource;
++
++#include "queue.h"
++using CryptoPP::ByteQueue;
++
++#include "integer.h"
++using CryptoPP::Integer;
++
++#include "eccrypto.h"
++using CryptoPP::ECDSA;
++using CryptoPP::ECP;
++using CryptoPP::EC2N;
++using CryptoPP::DL_PublicKey;
++using CryptoPP::DL_PrivateKey;
++using CryptoPP::DL_PublicKey_EC;
++using CryptoPP::DL_PrivateKey_EC;
++using CryptoPP::DL_GroupParameters_EC;
++
++#include "gfpcrypt.h"
++using CryptoPP::DL_GroupParameters_DSA;
++
++#include "osrng.h"
++using CryptoPP::AutoSeededRandomPool;
++
++#include "pem.h"
++using CryptoPP::PEM_Load;
++using CryptoPP::PEM_Save;
++
++int main(int argc, char* argv[])
++{
++    (void)argc; (void)argv;
++    cin.sync_with_stdio(false);
++    
++    AutoSeededRandomPool prng;
++    
++    try
++    {
++        // Test parsing a PEM file (not recognizing any keys)
++        cout << "Running 0" << endl;
++        FileSource fs00("rsa-pub.pem", true);
++        ByteQueue k0;
++        PEM_NextObject(fs00, k0);
++        
++        FileSink fs01("stuff.pem", true);
++        k0.TransferTo(fs01);
++        fs01.MessageEnd();
++        
++        /////
++        
++        // Test read RSA public
++        cout << "Running 1" << endl;
++        FileSource fs1("rsa-pub.pem", true);
++        RSA::PublicKey k1;
++        PEM_Load(fs1, k1);
++        
++        // Test read RSA private
++        cout << "Running 2" << endl;
++        FileSource fs2("rsa-priv.pem", true);
++        RSA::PrivateKey k2;
++        PEM_Load(fs2, k2);
++        
++        // Test read RSA encrypted private
++        cout << "Running 3" << endl;
++        FileSource fs3("rsa-enc-priv.pem", true);
++        RSA::PrivateKey k3;
++        PEM_Load(fs3, k3, "test", 4);
++        
++        // Test write RSA public
++        cout << "Running 4" << endl;
++        FileSink fs4("rsa-pub-xxx.pem", true);
++        PEM_Save(fs4, k1);
++        fs4.MessageEnd();
++        
++        // Test write RSA private
++        cout << "Running 5" << endl;
++        FileSink fs5("rsa-priv-xxx.pem", true);
++        PEM_Save(fs5, k2);
++        fs5.MessageEnd();
++        
++        // Test write RSA encrypted private
++        cout << "Running 6" << endl;
++        FileSink fs6("rsa-enc-priv-xxx.pem", true);
++        PEM_Save(fs6, prng, k3, "AES-128-CBC", "test", 4);
++        fs6.MessageEnd();
++        
++        /////
++        
++        // Test read DSA public
++        cout << "Running 7" << endl;
++        FileSource fs7("dsa-pub.pem", true);
++        DSA::PublicKey k7;
++        PEM_Load(fs7, k7);
++        
++        // Test read DSA private
++        cout << "Running 8" << endl;
++        FileSource fs8("dsa-priv.pem", true);
++        DSA::PrivateKey k8;
++        PEM_Load(fs8, k8);
++        
++        // Test read DSA encrypted private
++        cout << "Running 9" << endl;
++        FileSource fs9("dsa-enc-priv.pem", true);
++        DSA::PrivateKey k9;
++        PEM_Load(fs9, k9, "test", 4);
++        
++        // Test write DSA public
++        cout << "Running 10" << endl;
++        FileSink fs10("dsa-pub-xxx.pem", true);
++        PEM_Save(fs10, k7);
++        fs10.MessageEnd();
++        
++        // Test write DSA private
++        cout << "Running 11" << endl;
++        FileSink fs11("dsa-priv-xxx.pem", true);
++        PEM_Save(fs11, k8);
++        fs11.MessageEnd();
++        
++        // Test write DSA encrypted private
++        cout << "Running 12" << endl;
++        FileSink fs12("dsa-enc-priv-xxx.pem", true);
++        PEM_Save(fs12, prng, k9, "AES-128-CBC", "test", 4);
++        fs12.MessageEnd();
++        
++        /////
++        
++        // Test read EC public
++        cout << "Running 13" << endl;
++        FileSource fs13("ec-pub.pem", true);
++        DL_PublicKey_EC<ECP> k13;
++        PEM_Load(fs13, k13);
++        
++        // Test read EC private
++        cout << "Running 14" << endl;
++        FileSource fs14("ec-priv.pem", true);
++        DL_PrivateKey_EC<ECP> k14;
++        PEM_Load(fs14, k14);
++        
++        // Test read EC encrypted private
++        cout << "Running 15" << endl;
++        FileSource fs15("ec-enc-priv.pem", true);
++        DL_PrivateKey_EC<ECP> k15;
++        PEM_Load(fs15, k15, "test", 4);
++        
++        // Test write EC public
++        cout << "Running 16" << endl;
++        FileSink fs16("ec-pub-xxx.pem", true);
++        PEM_Save(fs16, k13);
++        fs16.MessageEnd();
++        
++        // Test write EC private
++        cout << "Running 17" << endl;
++        FileSink fs17("ec-priv-xxx.pem", true);
++        PEM_Save(fs17, k14);
++        fs17.MessageEnd();
++        
++        // Test read EC encrypted private
++        cout << "Running 18" << endl;
++        FileSink fs18("ec-enc-priv-xxx.pem", true);
++        PEM_Save(fs18, prng, k15, "AES-128-CBC", "test", 4);
++        fs18.MessageEnd();
++        
++        /////
++        
++        // Two public keys in this file
++        cout << "Running 19" << endl;
++        FileSource fs19("rsa-pub-double.pem", true);
++        RSA::PublicKey k19a, k19b;
++        PEM_Load(fs19, k19a);
++        PEM_Load(fs19, k19b);
++        assert(k19a.GetModulus() == k19b.GetModulus() && k19a.GetPublicExponent() == k19b.GetPublicExponent());
++        
++        // Diffie-Hellman
++        
++        cout << "Running 20" << endl;
++        FileSource fs20("dh-params.pem", true);
++        Integer i1, i2;
++        PEM_DH_Load(fs20, i1, i2);
++        
++        cout << "Running 21" << endl;
++        FileSink fs21("dh-params-xxx.pem", true);
++        PEM_DH_Save(fs21, i1, i2);
++        fs21.MessageEnd();
++        
++        cout << "Running 22" << endl;
++        FileSource fs22("dh-params-xxx.pem", true);
++        PEM_DH_Load(fs22, i1, i2);
++        
++        // Missing CR or LF on last line
++        
++        cout << "Running 23" << endl;
++        FileSource fs23("rsa-trunc-1.pem", true);
++        RSA::PublicKey k23;
++        PEM_Load(fs23, k23);
++        
++        try
++        {
++            // Missing two characters - the last dash and the LF
++            
++            cout << "Running 24" << endl;
++            FileSource fs24("rsa-trunc-2.pem", true);
++            RSA::PublicKey k24;
++            PEM_Load(fs24, k24);
++            
++            cerr << "Failed test 24" << endl;
++            
++        }
++        catch(const Exception& ex)
++        {
++            // Do nothing... expected
++        }
++        
++        try
++        {
++            // Only the "-----BEGINE PUBLIC KEY-----"
++            
++            cout << "Running 25" << endl;
++            FileSource fs25("rsa-short.pem", true);
++            RSA::PublicKey k25;
++            PEM_Load(fs25, k25);
++            
++            cerr << "Failed test 25" << endl;
++            
++        }
++        catch(const Exception& ex)
++        {
++            // Do nothing... expected
++        }
++        
++        // Two keys concat'd, missing the CRLF between them
++        
++        // Two public keys in this file
++        cout << "Running 26" << endl;
++        FileSource fs26("rsa-concat.pem", true);
++        RSA::PublicKey k26a, k26b;
++        PEM_Load(fs26, k26a);
++        PEM_Load(fs26, k26b);
++        assert(k26a.GetModulus() == k26b.GetModulus() && k26a.GetPublicExponent() == k26b.GetPublicExponent());
++        
++        // DSA params
++        cout << "Running 27" << endl;
++        FileSource fs27("dsa-params.pem", true);
++        DL_GroupParameters_DSA p27;
++        PEM_Load(fs27, p27);
++        
++        cout << "Running 28" << endl;
++        FileSink fs28("dsa-params-xxx.pem", true);
++        PEM_Save(fs28, p27);
++        fs28.MessageEnd();
++        
++        // EC params
++        cout << "Running 29" << endl;
++        FileSource fs29("ec-params.pem", true);
++        DL_GroupParameters_EC<ECP> p29;
++        PEM_Load(fs29, p29);
++        
++        cout << "Running 30" << endl;
++        FileSink fs30("ec-params-xxx.pem", true);
++        PEM_Save(fs30, p29);
++        fs30.MessageEnd();
++        
++        // cacert.pem has about 150 certs in it
++        cout << "Running 31" << endl;
++        FileSource fs31("cacert.pem", true);
++        ByteQueue temp;
++        unsigned count = 0;
++        
++        try
++        {
++            while(fs31.AnyRetrievable())
++            {
++                PEM_NextObject(fs31, temp);
++                temp.Clear();
++                count++;
++            }
++        }
++        catch(const Exception& ex)
++        {
++            cerr << "Failed test 31" << endl;
++        }
++        
++        cout << "Parsed " << count << " certifcates from cacert.pem" << endl;
++        
++        cout << "All tests passed" << endl;
++        
++    }
++    catch(const Exception& ex)
++    {
++        cerr << ex.what() << endl;
++    }
++    
++    return 0;
++}
+Index: libcrypto++-5.6.0/pem-verify-keys.sh
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-verify-keys.sh
+@@ -0,0 +1,75 @@
++#! /bin/sh
++
++# Script to verify the test keys written by pem-test.cpp
++
++#################
++# RSA keys
++
++# The RSA command returns 0 on success
++
++echo "read RSA key"
++openssl rsa -in rsa-pub-xxx.pem -pubin -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read RSA public key"
++fi
++
++echo "read RSA key"
++openssl rsa -in rsa-priv-xxx.pem -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read RSA private key"
++fi
++
++echo "read RSA key"
++openssl rsa -in rsa-enc-priv-xxx.pem -passin pass:test -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read encrypted RSA private key"
++fi
++
++#################
++# DSA keys
++
++# The DSA command is broken. It returns 1 when using '-noout' option instead of 0.
++
++echo "read DSA param"
++openssl dsaparam -in dsa-params-xxx.pem -text -noout >/dev/null
++
++openssl dsa -in dsa-pub-xxx.pem -pubin -text -noout >/dev/null
++
++openssl dsa -in dsa-priv-xxx.pem -text -noout >/dev/null
++
++openssl dsa -in dsa-enc-priv-xxx.pem -passin pass:test -text -noout >/dev/null
++
++#################
++# EC keys
++
++# The EC command returns 0 on success
++
++echo "read EC param"
++openssl ecparam -in ec-params-xxx.pem -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read EC params"
++fi
++
++openssl ec -in ec-pub-xxx.pem -pubin -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read EC public key"
++fi
++
++openssl ec -in ec-priv-xxx.pem -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read EC private key"
++fi
++
++openssl ec -in ec-enc-priv-xxx.pem -passin pass:test -text -noout >/dev/null
++RET=$?
++if [ $RET -ne 0 ];then
++echo "Failed to read encrypted EC private key"
++fi
++
++echo "Finished testing keys written by Crypto++"
+Index: libcrypto++-5.6.0/pem-wr.cpp
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem-wr.cpp
+@@ -0,0 +1,619 @@
++// pem-wr.cpp - PEM write routines. Written and placed in the public domain by Jeffrey Walton
++//              Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++///////////////////////////////////////////////////////////////////////////
++// For documentation on the PEM read and write routines, see
++//   http://www.cryptopp.com/wiki/PEM_Pack
++///////////////////////////////////////////////////////////////////////////
++
++#include <string>
++using std::string;
++
++#include <memory>
++using std::auto_ptr;
++
++#include <algorithm>
++using std::transform;
++
++#include <cctype>
++#include <cassert>
++
++#include "cryptlib.h"
++#include "secblock.h"
++#include "camellia.h"
++#include "filters.h"
++#include "base64.h"
++#include "files.h"
++#include "queue.h"
++#include "modes.h"
++#include "osrng.h"
++#include "asn.h"
++#include "aes.h"
++#include "idea.h"
++#include "des.h"
++#include "hex.h"
++
++#include "pem.h"
++#include "pem-com.h"
++
++#define CRYPTOPP_ENABLE_NAMESPACE_WEAK 1
++#include "md5.h"
++
++NAMESPACE_BEGIN(CryptoPP)
++
++//////////////////////////////////////////////////////////////////////////////
++// Returns a keyed StreamTransformation ready to use to encrypt a DER encoded key
++
++static void PEM_CipherForAlgorithm(RandomNumberGenerator& rng, string algorithm, auto_ptr<StreamTransformation>& stream,
++                                   SecByteBlock& key, SecByteBlock& iv, const char* password, size_t length);
++
++//////////////////////////////////////////////////////////////////////////////
++// DER encodes a key.
++
++static void PEM_DEREncode(BufferedTransformation& bt, const PKCS8PrivateKey& key);
++static void PEM_DEREncode(BufferedTransformation& bt, const X509PublicKey& key);
++
++// Ambiguous call; needs a best match. Provide an overload.
++static void PEM_DEREncode(BufferedTransformation& bt, const RSA::PrivateKey& key);
++
++// Special handling for DSA private keys. Crypto++ provides {version,x}, while OpenSSL expects {version,p,q,g,y,x}.
++static void PEM_DEREncode(BufferedTransformation& bt, const DSA::PrivateKey& key);
++
++// Special handling for EC private keys. Crypto++ provides {version,x}, while OpenSSL expects {version,x,curve oid,y}.
++template <class EC>
++static void PEM_DEREncode(BufferedTransformation& bt, const DL_PrivateKey_EC<EC>& key);
++
++//////////////////////////////////////////////////////////////////////////////
++// Encrypts a DER encoded key.
++
++static void PEM_Encrypt(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream);
++static void PEM_EncryptAndEncode(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream);
++
++//////////////////////////////////////////////////////////////////////////////
++// Writes a PEM encoded EC parameters to the BufferedTransformation
++
++template <class EC>
++static void PEM_SaveParams(BufferedTransformation& bt, const DL_GroupParameters_EC< EC >& params, const SecByteBlock& pre, const SecByteBlock& post);
++
++//////////////////////////////////////////////////////////////////////////////
++// Writes a PEM encoded key to the BufferedTransformation
++
++template <class KEY>
++static void PEM_SaveKey(BufferedTransformation& bt,
++                        const KEY& key, const SecByteBlock& pre, const SecByteBlock& post);
++
++template <class PUBLIC_KEY>
++static void PEM_SavePublicKey(BufferedTransformation& bt,
++                              const PUBLIC_KEY& key, const SecByteBlock& pre, const SecByteBlock& post);
++
++template <class PRIVATE_KEY>
++static void PEM_SavePrivateKey(BufferedTransformation& bt,
++                               const PRIVATE_KEY& key, const SecByteBlock& pre, const SecByteBlock& post);
++
++template <class PRIVATE_KEY>
++static void PEM_SavePrivateKey(BufferedTransformation& bt, RandomNumberGenerator& rng,
++                               const PRIVATE_KEY& key, const SecByteBlock& pre, const SecByteBlock& post,
++                               const std::string& algorithm, const char* password, size_t length);
++
++//////////////////////////////////////////////////////////////////////////////
++// Fetches and sets encodeAsOID parameter
++
++template <class EC>
++static bool PEM_GetNamedCurve(const DL_GroupParameters_EC<EC>& params);
++
++template <class EC>
++static void PEM_SetNamedCurve(const DL_GroupParameters_EC<EC>& params, bool flag);
++
++//////////////////////////////////////////////////////////////////////////////
++//////////////////////////////////////////////////////////////////////////////
++
++void PEM_Save(BufferedTransformation& bt, const RSA::PublicKey& rsa)
++{
++    PEM_SavePublicKey(bt, rsa, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++}
++
++void PEM_Save(BufferedTransformation& bt, const RSA::PrivateKey& rsa)
++{
++    PEM_SavePrivateKey(bt, rsa, SBB_RSA_PRIVATE_BEGIN, SBB_RSA_PRIVATE_END);
++}
++
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const RSA::PrivateKey& rsa, const string& algorithm, const char* password, size_t length)
++{
++    PEM_SavePrivateKey(bt, rng, rsa, SBB_RSA_PRIVATE_BEGIN, SBB_RSA_PRIVATE_END, algorithm, password, length);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DSA::PublicKey& dsa)
++{
++    PEM_SavePublicKey(bt, dsa, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DSA::PrivateKey& dsa)
++{
++    PEM_SavePrivateKey(bt, dsa, SBB_DSA_PRIVATE_BEGIN, SBB_DSA_PRIVATE_END);
++}
++
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DSA::PrivateKey& dsa, const string& algorithm, const char* password, size_t length)
++{
++    PEM_SavePrivateKey(bt, rng, dsa, SBB_DSA_PRIVATE_BEGIN, SBB_DSA_PRIVATE_END, algorithm, password, length);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_EC<ECP>& params)
++{
++    bool old = PEM_GetNamedCurve(params);
++    PEM_SetNamedCurve(params, true);
++    
++    PEM_SaveParams(bt, params, SBB_EC_PARAMETERS_BEGIN, SBB_EC_PARAMETERS_END);
++    PEM_SetNamedCurve(params, old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_EC<EC2N>& params)
++{
++    bool old = PEM_GetNamedCurve(params);
++    PEM_SetNamedCurve(params, true);
++    
++    PEM_SaveParams(bt, params, SBB_EC_PARAMETERS_BEGIN, SBB_EC_PARAMETERS_END);
++    PEM_SetNamedCurve(params, old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_PublicKey_EC<ECP>& ec)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePublicKey(bt, ec, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_PrivateKey_EC<ECP>& ec)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePrivateKey(bt, ec, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DL_PrivateKey_EC<ECP>& ec, const std::string& algorithm, const char* password, size_t length)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePrivateKey(bt, rng, ec, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END, algorithm, password, length);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_PublicKey_EC<EC2N>& ec)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePublicKey(bt, ec, SBB_PUBLIC_BEGIN, SBB_PUBLIC_END);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_PrivateKey_EC<EC2N>& ec)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePrivateKey(bt, ec, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DL_PrivateKey_EC<EC2N>& ec, const std::string& algorithm, const char* password, size_t length)
++{
++    bool old = PEM_GetNamedCurve(ec.GetGroupParameters());
++    PEM_SetNamedCurve(ec.GetGroupParameters(), true);
++    
++    PEM_SavePrivateKey(bt, rng, ec, SBB_EC_PRIVATE_BEGIN, SBB_EC_PRIVATE_END, algorithm, password, length);
++    PEM_SetNamedCurve(ec.GetGroupParameters(), old);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa)
++{
++    PEM_Save(bt, dynamic_cast<const DL_PrivateKey_EC<ECP>&>(ecdsa));
++}
++
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa, const std::string& algorithm, const char* password, size_t length)
++{
++    PEM_Save(bt, rng, dynamic_cast<DL_PrivateKey_EC<ECP>&>(ecdsa), algorithm, password, length);
++}
++
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_DSA& params)
++{
++    ByteQueue queue;
++    
++    PEM_WriteLine(queue, SBB_DSA_PARAMETERS_BEGIN);
++    
++    Base64Encoder encoder(new Redirector(queue), true /*lineBreak*/, RFC1421_LINE_BREAK);
++    params.Save(encoder);
++    encoder.MessageEnd();
++    
++    PEM_WriteLine(queue, SBB_DSA_PARAMETERS_END);
++    
++    queue.TransferTo(bt);
++    bt.MessageEnd();
++}
++
++void PEM_DH_Save(BufferedTransformation& bt, const Integer& p, const Integer& g)
++{
++    ByteQueue queue;
++    
++    PEM_WriteLine(queue, SBB_DH_PARAMETERS_BEGIN);
++    
++    Base64Encoder encoder(new Redirector(queue), true /*lineBreak*/, RFC1421_LINE_BREAK);
++    
++    DERSequenceEncoder seq(encoder);
++      p.BEREncode(seq);
++      g.BEREncode(seq);
++    seq.MessageEnd();
++    
++    encoder.MessageEnd();
++    
++    PEM_WriteLine(queue, SBB_DH_PARAMETERS_END);
++    
++    queue.TransferTo(bt);
++    bt.MessageEnd();
++}
++
++void PEM_DH_Save(BufferedTransformation& bt, const Integer& p, const Integer& q, const Integer& g)
++{
++    ByteQueue queue;
++    
++    PEM_WriteLine(queue, SBB_DH_PARAMETERS_BEGIN);
++    
++    Base64Encoder encoder(new Redirector(queue), true /*lineBreak*/, RFC1421_LINE_BREAK);
++    
++    DERSequenceEncoder seq(encoder);
++      p.BEREncode(seq);
++      q.BEREncode(seq);
++      g.BEREncode(seq);
++    seq.MessageEnd();
++    
++    encoder.MessageEnd();
++    
++    PEM_WriteLine(queue, SBB_DH_PARAMETERS_END);
++    
++    queue.TransferTo(bt);
++    bt.MessageEnd();
++}
++
++template <class EC>
++void PEM_SaveParams(BufferedTransformation& bt, const DL_GroupParameters_EC< EC >& params, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    PEM_WriteLine(bt, pre);
++    
++    Base64Encoder encoder(new Redirector(bt), true /*lineBreak*/, RFC1421_LINE_BREAK);
++    
++    params.DEREncode(encoder);
++    encoder.MessageEnd();
++    
++    PEM_WriteLine(bt, post);
++    
++    bt.MessageEnd();
++}
++
++template <class EC>
++void PEM_SavePrivateKey(BufferedTransformation& bt, const DL_PrivateKey_EC<EC>& key, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    PEM_WriteLine(bt, pre);
++    
++    ByteQueue queue;
++    PEM_DEREncode(queue, key);
++    
++    PEM_Base64Encode(queue, bt);
++    
++    PEM_WriteLine(bt, post);
++    
++    bt.MessageEnd();
++}
++
++void PEM_DEREncode(BufferedTransformation& bt, const DSA::PrivateKey& key)
++{
++    // Crypto++ provides {version,x}, while OpenSSL expects {version,p,q,g,y,x}.
++    
++    const DL_GroupParameters_DSA& params = key.GetGroupParameters();
++    
++    DSA::PublicKey pkey;
++    key.MakePublicKey(pkey);
++    
++    DERSequenceEncoder seq(bt);
++    
++    // Version
++    DEREncodeUnsigned<word32>(seq, 0);
++    
++    // P
++    params.GetModulus().DEREncode(seq);
++    
++    // Q
++    params.GetSubgroupOrder().DEREncode(seq);
++    
++    // G
++    params.GetGenerator().DEREncode(seq);
++    
++    // Y
++    pkey.GetPublicElement().DEREncode(seq);
++    
++    // X
++    key.GetPrivateExponent().DEREncode(seq);
++    
++    seq.MessageEnd();
++}
++
++template <class EC>
++void PEM_DEREncode(BufferedTransformation& bt, const DL_PrivateKey_EC<EC>& key)
++{
++    // Crypto++ provides {version,x}, while OpenSSL expects {version,x,curve oid,y}.
++    
++    // Need a public key to encode the public element.
++    DL_PublicKey_EC<EC> pkey;
++    key.MakePublicKey(pkey);
++    
++    // Prefetch the group parmaters
++    const DL_GroupParameters_EC<EC>& params = pkey.GetGroupParameters();
++    
++    // Sequence begin
++    DERSequenceEncoder seq(bt);
++    
++    // Version
++    DEREncodeUnsigned<word32>(seq, 1);
++    
++    // Private key
++    const Integer& x = key.GetPrivateExponent();
++    x.DEREncodeAsOctetString(seq, params.GetSubgroupOrder().ByteCount());
++    
++    // Named curve
++    OID oid;
++    if(!key.GetVoidValue(Name::GroupOID(), typeid(oid), &oid))
++        throw Exception(Exception::OTHER_ERROR, "PEM_DEREncode: failed to retrieve curve OID");
++    
++    // Encoder for OID
++    DERGeneralEncoder cs1(seq, CONTEXT_SPECIFIC | CONSTRUCTED | 0);
++    oid.DEREncode(cs1);
++    cs1.MessageEnd();
++    
++    // Encoder for public key (outer CONTEXT_SPECIFIC)
++    DERGeneralEncoder cs2(seq, CONTEXT_SPECIFIC | CONSTRUCTED | 1);
++    
++    // Encoder for public key (inner BIT_STRING)
++    DERGeneralEncoder cs3(cs2, BIT_STRING);
++    cs3.Put(0x00);        // Unused bits
++    params.GetCurve().EncodePoint(cs3, pkey.GetPublicElement(), false);
++    
++    // Done encoding
++    cs3.MessageEnd();
++    cs2.MessageEnd();
++    
++    // Sequence end
++    seq.MessageEnd();
++    
++    bt.MessageEnd();
++}
++
++void PEM_DEREncode(BufferedTransformation& bt, const PKCS8PrivateKey& key)
++{
++    key.DEREncodePrivateKey(bt);
++    bt.MessageEnd();
++}
++
++void PEM_DEREncode(BufferedTransformation& bt, const X509PublicKey& key)
++{
++    key.DEREncode(bt);
++    bt.MessageEnd();
++}
++
++void PEM_DEREncode(BufferedTransformation& bt, const RSA::PrivateKey& key)
++{
++    return PEM_DEREncode(bt, dynamic_cast<const PKCS8PrivateKey&>(key));
++}
++
++template <class PUBLIC_KEY>
++void PEM_SavePublicKey(BufferedTransformation& bt,
++                       const PUBLIC_KEY& key, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    PEM_SaveKey(bt, key, pre, post);
++}
++
++template <class PRIVATE_KEY>
++static void PEM_SavePrivateKey(BufferedTransformation& bt,
++                               const PRIVATE_KEY& key, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    PEM_SaveKey(bt, key, pre, post);
++}
++
++template <class KEY>
++void PEM_SaveKey(BufferedTransformation& bt, const KEY& key, const SecByteBlock& pre, const SecByteBlock& post)
++{
++    PEM_WriteLine(bt, pre);
++    
++    ByteQueue queue;
++    PEM_DEREncode(queue, key);
++    
++    PEM_Base64Encode(queue, bt);
++    
++    PEM_WriteLine(bt, post);
++    
++    bt.MessageEnd();
++}
++
++template<class PRIVATE_KEY>
++void PEM_SavePrivateKey(BufferedTransformation& bt, RandomNumberGenerator& rng,
++                        const PRIVATE_KEY& key, const SecByteBlock& pre, const SecByteBlock& post,
++                        const std::string& algorithm, const char* password, size_t length)
++{
++    ByteQueue queue;
++    
++    PEM_WriteLine(queue, pre);
++    
++    // Proc-Type: 4,ENCRYPTED
++    PEM_WriteLine(queue, SBB_PROC_TYPE_ENC);
++    
++    SecByteBlock _key, _iv;
++    auto_ptr<StreamTransformation> stream;
++    
++    // After this executes, we have a StreamTransformation keyed and ready to go.
++    PEM_CipherForAlgorithm(rng, algorithm, stream, _key, _iv, password, length);
++    
++    // Encode the IV. It gets written to the encapsulated header.
++    string encoded;
++    HexEncoder hex(new StringSink(encoded));
++    hex.Put(_iv.data(), _iv.size());
++    hex.MessageEnd();
++    
++    // e.g., DEK-Info: AES-128-CBC,5E537774BCCD88B3E2F47FE294C93253
++    string line;
++    line += LBL_DEK_INFO + LBL_COLON + LBL_SPACE;
++    line += algorithm + LBL_COMMA + encoded;
++    
++    // The extra '\n' separates the control fields from the encapsulated
++    //   text (i.e, header from body). Its required by RFC 1421.
++    PEM_WriteLine(queue, line);
++    queue.Put('\n');
++    
++    ByteQueue temp;
++    PEM_DEREncode(temp, key);
++    
++    PEM_EncryptAndEncode(temp, queue, stream);
++    
++    PEM_WriteLine(queue, post);
++    
++    queue.TransferTo(bt);
++    bt.MessageEnd();
++}
++
++void PEM_CipherForAlgorithm(RandomNumberGenerator& rng, string algorithm, auto_ptr<StreamTransformation>& stream,
++                            SecByteBlock& key, SecByteBlock& iv, const char* password, size_t length)
++{
++    unsigned int ksize, vsize;
++    std::transform(algorithm.begin(), algorithm.end(), algorithm.begin(), (int(*)(int))std::toupper);
++    
++    if(algorithm == "AES-256-CBC")
++    {
++        ksize = 32;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Encryption);
++    }
++    else if(algorithm == "AES-192-CBC")
++    {
++        ksize = 24;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Encryption);
++    }
++    else if(algorithm == "AES-128-CBC")
++    {
++        ksize = 16;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<AES>::Encryption);
++    }
++    else if(algorithm == "CAMELLIA-256-CBC")
++    {
++        ksize = 32;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Encryption);
++    }
++    else if(algorithm == "CAMELLIA-192-CBC")
++    {
++        ksize = 24;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Encryption);
++    }
++    else if(algorithm == "CAMELLIA-128-CBC")
++    {
++        ksize = 16;
++        vsize = 16;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<Camellia>::Encryption);
++    }
++    else if(algorithm == "DES-EDE3-CBC")
++    {
++        ksize = 24;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<DES_EDE3>::Encryption);
++    }
++    else if(algorithm == "IDEA-CBC")
++    {
++        ksize = 16;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<IDEA>::Encryption);
++    }
++    else if(algorithm == "DES-CBC")
++    {
++        ksize = 8;
++        vsize = 8;
++        
++        stream = auto_ptr<StreamTransformation>(new CBC_Mode<DES>::Encryption);
++    }
++    else
++    {
++        throw NotImplemented("PEM_CipherForAlgorithm: '" + algorithm + "' is not implemented");
++    }
++    
++    const unsigned char* _pword = reinterpret_cast<const unsigned char*>(password);
++    const size_t _plen = length;
++    
++    SecByteBlock _key(ksize), _iv(vsize), _salt(vsize);
++    
++    // The IV pulls double duty. First, the first PKCS5_SALT_LEN bytes are used
++    //   as the Salt in EVP_BytesToKey. Second, its used as the IV in the cipher.
++    assert(_iv.size() >= OPENSSL_PKCS5_SALT_LEN);
++
++    rng.GenerateBlock(_iv.data(), _iv.size());
++    _salt = _iv;
++    
++    // MD5 is engrained OpenSSL goodness. MD5, IV and Password are IN; KEY is OUT.
++    //   {NULL,0} parameters are the OUT IV. However, the original IV in the PEM
++    //   header is used; and not the derived IV.
++    Weak::MD5 md5;
++    int ret = OPENSSL_EVP_BytesToKey(md5, _salt.data(), _pword, _plen, 1, _key.data(), _key.size(), NULL, 0);
++    if(ret != static_cast<int>(ksize))
++        throw Exception(Exception::OTHER_ERROR, "PEM_CipherForAlgorithm: EVP_BytesToKey failed");
++    
++    SymmetricCipher* cipher = dynamic_cast<SymmetricCipher*>(stream.get());
++    assert(cipher != NULL);
++    
++    cipher->SetKeyWithIV(_key.data(), _key.size(), _iv.data(), _iv.size());
++    
++    _key.swap(key);
++    _iv.swap(iv);
++}
++
++void PEM_Encrypt(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream)
++{
++    StreamTransformationFilter filter(*stream, new Redirector(dest));
++    src.TransferTo(filter);
++    filter.MessageEnd();
++}
++
++void PEM_EncryptAndEncode(BufferedTransformation& src, BufferedTransformation& dest, auto_ptr<StreamTransformation>& stream)
++{
++    ByteQueue temp;
++    PEM_Encrypt(src, temp, stream);
++    
++    PEM_Base64Encode(temp, dest);
++}
++
++template <class EC>
++bool PEM_GetNamedCurve(const DL_GroupParameters_EC<EC>& params)
++{
++    return params.GetEncodeAsOID();
++}
++
++template <class EC>
++void PEM_SetNamedCurve(const DL_GroupParameters_EC<EC>& params, bool flag)
++{
++    DL_GroupParameters_EC<EC>& pp = const_cast<DL_GroupParameters_EC<EC>&>(params);
++    pp.SetEncodeAsOID(flag);
++}
++
++NAMESPACE_END
+Index: libcrypto++-5.6.0/pem.h
+===================================================================
+--- /dev/null
++++ libcrypto++-5.6.0/pem.h
+@@ -0,0 +1,135 @@
++// pem.h - PEM read and write routines. Written and placed in the public domain by Jeffrey Walton
++//         Copyright assigned to the Crypto++ project.
++//
++// Crypto++ Library is copyrighted as a compilation and (as of version 5.6.2) licensed
++// under the Boost Software License 1.0, while the individual files in the compilation
++// are all public domain.
++
++///////////////////////////////////////////////////////////////////////////
++// For documentation on the PEM read and write routines, see
++//   http://www.cryptopp.com/wiki/PEM_Pack
++///////////////////////////////////////////////////////////////////////////
++
++// Why Not Specialize Function Templates?
++//   http://www.gotw.ca/publications/mill17.htm
++
++#ifndef CRYPTOPP_PEM_H
++#define CRYPTOPP_PEM_H
++
++#include "pubkey.h"
++#include "eccrypto.h"
++#include "integer.h"
++#include "dsa.h"
++#include "rsa.h"
++
++NAMESPACE_BEGIN(CryptoPP)
++
++// Attempts to read a PEM encoded key or parameter. If there are multiple keys or parameters, then only
++//   the first is read. If `trimTrailing` is true, then trailing whitespace is trimmed from the source
++//   BufferedTransformation. The destination BufferedTransformation will have one line ending if it was
++//   present in source.
++// PEM_NextObject will parse an invalid object. For example, it will parse a key or parameter with
++//   `-----BEGIN FOO-----` and `-----END BAR-----`. The parser only looks for BEGIN and END (and the
++//   dashes). The malformed input will be caught later when a particular key or parameter is parsed.
++// On failure, InvalidDataFormat is thrown.
++void PEM_NextObject(BufferedTransformation& src, BufferedTransformation& dest, bool trimTrailing=true);
++
++// PEM types we understand. We can read and write many of them, but not all of them.
++//   http://stackoverflow.com/questions/5355046/where-is-the-pem-file-format-specified
++enum PEM_Type { PEM_PUBLIC_KEY = 1, PEM_PRIVATE_KEY,
++    PEM_RSA_PUBLIC_KEY, PEM_RSA_PRIVATE_KEY, PEM_RSA_ENC_PRIVATE_KEY,
++    PEM_DSA_PUBLIC_KEY, PEM_DSA_PRIVATE_KEY, PEM_DSA_ENC_PRIVATE_KEY,
++    PEM_EC_PUBLIC_KEY, PEM_ECDSA_PUBLIC_KEY, PEM_EC_PRIVATE_KEY, PEM_EC_ENC_PRIVATE_KEY,
++    PEM_EC_PARAMETERS, PEM_DH_PARAMETERS, PEM_DSA_PARAMETERS,
++    PEM_X509_CERTIFICATE, PEM_REQ_CERTIFICATE, PEM_CERTIFICATE,
++    PEM_UNSUPPORTED = 0xFFFFFFFF };
++
++// Attempts to determine the type of key or parameter
++PEM_Type PEM_GetType(const BufferedTransformation& bt);
++
++//////////////////////////////////////////////////////////////////////////////////////////
++
++// Begin the Read routines. Internally, the read routines call PEM_NextObject.
++// On failure, any number of Crypto++ exceptions are thrown. No custom
++// exceptions are thrown.
++
++void PEM_Load(BufferedTransformation& bt, RSA::PublicKey& rsa);
++void PEM_Load(BufferedTransformation& bt, RSA::PrivateKey& rsa);
++void PEM_Load(BufferedTransformation& bt, RSA::PrivateKey& rsa,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DSA::PublicKey& dsa);
++void PEM_Load(BufferedTransformation& bt, DSA::PrivateKey& dsa);
++void PEM_Load(BufferedTransformation& bt, DSA::PrivateKey& dsa,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DL_PublicKey_EC<ECP>& ec);
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<ECP>& ec);
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<ECP>& ec,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DL_PublicKey_EC<EC2N>& ec);
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<EC2N>& ec);
++void PEM_Load(BufferedTransformation& bt, DL_PrivateKey_EC<EC2N>& ec,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa);
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<EC2N>::PrivateKey& ecdsa);
++void PEM_Load(BufferedTransformation& bt, DL_Keys_ECDSA<EC2N>::PrivateKey& ecdsa,
++              const char* password, size_t length);
++
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_DSA& params);
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_EC<ECP>& params);
++void PEM_Load(BufferedTransformation& bt, DL_GroupParameters_EC<EC2N>& params);
++
++void PEM_DH_Load(BufferedTransformation& bt, Integer& p, Integer& g);
++void PEM_DH_Load(BufferedTransformation& bt, Integer& p, Integer& q, Integer& g);
++
++//////////////////////////////////////////////////////////////////////////////////////////
++
++// Begin the Write routines. The write routines always write the "named curve"
++//   (i.e., the OID of secp256k1) rather than the domain paramters. This is because
++//   RFC 5915 specifies the format. In addition, OpenSSL cannot load and utilize
++//   an EC key with a non-named curve into a server.
++// For encrpted private keys, the algorithm should be a value like
++//   `AES-128-CBC`. See pem-rd.cpp and pem-wr.cpp for the values that are recognized.
++// On failure, any number of Crypto++ exceptions are thrown. No custom exceptions
++//   are thrown.
++
++void PEM_Save(BufferedTransformation& bt, const RSA::PublicKey& rsa);
++void PEM_Save(BufferedTransformation& bt, const RSA::PrivateKey& rsa);
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const RSA::PrivateKey& rsa,
++              const std::string& algorithm, const char* password, size_t length);
++
++void PEM_Save(BufferedTransformation& bt, const DSA::PublicKey& dsa);
++void PEM_Save(BufferedTransformation& bt, const DSA::PrivateKey& dsa);
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DSA::PrivateKey& dsa,
++              const std::string& algorithm, const char* password, size_t length);
++
++void PEM_Save(BufferedTransformation& bt, const DL_PublicKey_EC<ECP>& ec);
++void PEM_Save(BufferedTransformation& bt, const DL_PrivateKey_EC<ECP>& ec);
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DL_PrivateKey_EC<ECP>& ec,
++              const std::string& algorithm, const char* password, size_t length);
++
++void PEM_Save(BufferedTransformation& bt, const DL_PublicKey_EC<EC2N>& ec);
++void PEM_Save(BufferedTransformation& bt, const DL_PrivateKey_EC<EC2N>& ec);
++void PEM_Save(RandomNumberGenerator& rng,  BufferedTransformation& bt, const DL_PrivateKey_EC<EC2N>& ec,
++              const std::string& algorithm, const char* password, size_t length);
++
++void PEM_Save(BufferedTransformation& bt, const DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa);
++void PEM_Save(BufferedTransformation& bt, RandomNumberGenerator& rng, const DL_Keys_ECDSA<ECP>::PrivateKey& ecdsa,
++              const std::string& algorithm, const char* password, size_t length);
++
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_DSA& params);
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_EC<ECP>& params);
++void PEM_Save(BufferedTransformation& bt, const DL_GroupParameters_EC<EC2N>& params);
++
++void PEM_DH_Save(BufferedTransformation& bt, const Integer& p, const Integer& g);
++void PEM_DH_Save(BufferedTransformation& bt, const Integer& p, const Integer& q, const Integer& g);
++
++NAMESPACE_END
++
++#endif
+Index: libcrypto++-5.6.0/Makefile.am
+===================================================================
+--- libcrypto++-5.6.0.orig/Makefile.am
++++ libcrypto++-5.6.0/Makefile.am
+@@ -160,6 +160,9 @@ libcrypto___la_SOURCES = \
+ 	xtr.cpp \
+ 	xtrcrypt.cpp \
+ 	zdeflate.cpp \
++	pem-com.cpp \
++	pem-rd.cpp \
++	pem-wr.cpp \
+ 	zinflate.cpp \
+ 	zlib.cpp
+ 
+@@ -295,6 +298,8 @@ pkginclude_HEADERS = \
+ 	xtrcrypt.h \
+ 	zdeflate.h \
+ 	zinflate.h \
++	pem-com.h \
++	pem.h \
+ 	zlib.h
+ 
+ htmldir = $(datadir)/html
